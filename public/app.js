@@ -144,6 +144,7 @@ function identityGate() {
 }
 
 function render() {
+  const retainedAvatar = app.querySelector(".avatar");
   const tasks = filteredTasks();
   const openTasks = tasks.filter((task) => !task.completed);
   const completedTasks = tasks.filter((task) => task.completed).sort((left, right) => String(right.completed_at || "").localeCompare(String(left.completed_at || "")));
@@ -155,6 +156,11 @@ function render() {
     ${state.view === "today" ? progress() : ""}${state.view === "all" ? `<section class="all-summary"><span>所有事项</span><strong>${state.tasks.length}</strong><p>已完成 ${state.tasks.filter((task) => task.completed).length} 项</p></section>` : ""}${["today", "all"].includes(state.view) ? filters() : ""}
     ${state.view === "profile" ? `<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>我的身份码</p><strong>${state.identity.slice(0, 3)} ${state.identity.slice(3)}</strong><span>此代码仅用于隔离你的待办数据。</span><button data-action="switch-identity">切换身份码</button></section>` : taskContent}</div>
     ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="today" class="${state.view === "today" ? "active" : ""}"><span>◷</span>今日</button><button data-action="view" data-view="all" class="${state.view === "all" ? "active" : ""}"><span>☷</span>全部</button></nav></section>${editor()}${identityGate()}`;
+  const nextAvatar = app.querySelector(".avatar");
+  if (retainedAvatar && nextAvatar) {
+    retainedAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
+    nextAvatar.replaceWith(retainedAvatar);
+  }
 }
 
 function openEditor(task = { title: "", color: "violet", tags: [], due_date: today() }) { state.editor = { ...task }; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
