@@ -164,6 +164,90 @@
   box-shadow: 0 0 0 3px #fff;
 }
 
+.task-details {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: -2px 0 5px;
+  overflow: hidden;
+  color: #aaa9b4;
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-meta:has(.task-details) {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.task-meta:has(.task-details) > .due,
+.task-meta:has(.task-details) > .tag,
+.task-meta:has(.task-details) > .overdue-badge,
+.task-meta:has(.task-details) > .status-badge {
+  margin-right: 6px;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 5px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.15;
+  vertical-align: 1px;
+}
+
+.status-badge.in_progress { background: #e4edff; color: #5274bf; }
+.status-badge.paused { background: #eeecf3; color: #787582; }
+
+.task-card {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.task-body { min-width: 0; overflow: hidden; }
+
+.composer > textarea {
+  width: 100%;
+  min-height: 82px;
+  margin: 4px 0 7px;
+  padding: 11px 0;
+  resize: vertical;
+  border: 0;
+  border-bottom: 1px solid #e7e6eb;
+  outline: 0;
+  background: transparent;
+  color: #36353c;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.composer > textarea::placeholder { color: #aaa9b4; }
+
+.status-editor { min-height: 58px; }
+
+.status-options {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.status-option {
+  padding: 6px 7px;
+  border-radius: 8px;
+  background: #f0eff4;
+  color: #85838e;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.status-option.selected { background: #e9e6ff; color: #5f50ce; font-weight: 700; }
+
 .drag-handle {
   cursor: grab;
   touch-action: none;

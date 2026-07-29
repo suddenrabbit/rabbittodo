@@ -94,11 +94,15 @@ function filteredTasks() {
 
 function taskCard(task, { sortable = !task.completed } = {}) {
   const overdue = isOverdue(task);
+  const status = task.status || "none";
+  const statusBadge = !task.completed && status !== "none"
+    ? `<span class="status-badge ${status}">${status === "in_progress" ? "进行中" : "暂停"}</span>`
+    : "";
   return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : ""} ${overdue ? "is-overdue" : ""}" data-task-id="${task.id}">
     ${sortable ? `<button class="drag-handle" data-action="drag" data-id="${task.id}" aria-label="拖动排序">⠿</button>` : '<span class="drag-spacer" aria-hidden="true"></span>'}
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
     <div class="task-body"><h3>${escapeHtml(task.title)}</h3><div class="task-meta">
-      ${overdue ? '<span class="overdue-badge">超期</span>' : ""}<span class="due"><i class="due-icon">◷</i>${dateLabel(task.due_date)}</span>
+      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${overdue ? '<span class="overdue-badge">超期</span>' : ""}${statusBadge}<span class="due"><i class="due-icon">◷</i>${dateLabel(task.due_date)}</span>
       ${task.tags.map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}
     </div></div><i class="task-color-dot"></i>
   </article>`;
@@ -127,13 +131,24 @@ function tagsEditor() {
   return `<div class="composer-row tag-editor"><span>标签</span><div class="tag-input-wrap">${state.draftTags.map((tag) => `<button type="button" class="draft-tag" data-action="remove-tag" data-tag="${escapeHtml(tag)}">#${escapeHtml(tag)} <i>×</i></button>`).join("")}<input id="tag-input" value="${escapeHtml(state.tagInput)}" placeholder="${state.draftTags.length ? "继续输入" : "输入后按回车"}" aria-label="输入标签后按回车确认" /></div></div>`;
 }
 
+function statusEditor(task) {
+  const status = task.status || "none";
+  const options = [
+    ["none", "默认"],
+    ["in_progress", "▶ 进行中"],
+    ["paused", "Ⅱ 暂停"],
+  ];
+  return `<div class="composer-row status-editor"><span>任务状态</span><div class="status-options">${options.map(([value, label]) => `<button type="button" class="status-option status-${value} ${status === value ? "selected" : ""}" data-action="pick-task-status" data-status="${value}">${label}</button>`).join("")}</div></div>`;
+}
+
 function editor() {
   if (!state.editor) return "";
   const task = state.editor;
   return `<div class="modal-backdrop"><form class="composer" id="task-form"><div class="sheet-grabber"></div><div class="composer-head"><h2>${task.id ? "编辑事项" : "新建事项"}</h2><button type="button" data-action="close-editor">取消</button></div>
     <input id="task-title" value="${escapeHtml(task.title)}" placeholder="想完成什么？" autofocus required maxlength="200" />
+    <textarea id="task-details" placeholder="补充任务详情（可选）" maxlength="2000">${escapeHtml(task.details || "")}</textarea>
     <div class="composer-row"><span>颜色标签</span><div class="color-options">${COLORS.map((color) => `<button type="button" class="color-picker ${color} ${task.color === color ? "selected" : ""}" data-action="pick-color" data-color="${color}">${task.color === color ? "✓" : ""}</button>`).join("")}</div></div>
-    ${tagsEditor()}<label class="composer-row"><span>计划完成</span><input id="task-date" type="date" value="${task.due_date || ""}" /></label>
+    ${task.completed ? "" : statusEditor(task)}${tagsEditor()}<label class="composer-row"><span>计划完成</span><input id="task-date" type="date" value="${task.due_date || ""}" /></label>
     ${task.id ? '<button type="button" class="delete-button" data-action="delete-task">删除事项</button>' : ""}<button class="save-button" type="submit">${task.id ? "保存修改" : "添加事项"}</button>
   </form></div>`;
 }
@@ -163,7 +178,7 @@ function render() {
   }
 }
 
-function openEditor(task = { title: "", color: "violet", tags: [], due_date: today() }) { state.editor = { ...task }; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
+function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: today() }) { state.editor = { ...task, status: task.status || "none" }; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
 function commitTag() { const tag = state.tagInput.trim().replace(/^#/, ""); if (tag && !state.draftTags.includes(tag)) state.draftTags.push(tag); state.tagInput = ""; render(); document.querySelector("#tag-input")?.focus(); }
 
 app.addEventListener("click", async (event) => {
@@ -179,6 +194,7 @@ app.addEventListener("click", async (event) => {
     if (action === "tag-filter") { state.tag = button.dataset.tag; return render(); }
     if (action === "color-filter") { state.color = button.dataset.color; return render(); }
     if (action === "pick-color") { state.editor.color = button.dataset.color; return render(); }
+    if (action === "pick-task-status") { state.editor.status = button.dataset.status; return render(); }
     if (action === "remove-tag") { state.draftTags = state.draftTags.filter((tag) => tag !== button.dataset.tag); return render(); }
     if (action === "switch-identity") { localStorage.removeItem("todo-identity"); state.identity = ""; state.view = "today"; return render(); }
     if (action === "toggle") {
@@ -188,6 +204,7 @@ app.addEventListener("click", async (event) => {
       const completed = !task.completed;
       task.completed = completed;
       task.completed_at = completed ? new Date().toISOString() : null;
+      if (completed) task.status = "none";
       render();
       saveInBackground(async () => {
         const response = await api(`/api/tasks/${resolvedTaskId(id)}`, { method: "PATCH", body: JSON.stringify({ completed }) });
@@ -219,6 +236,7 @@ app.addEventListener("keydown", (event) => {
 app.addEventListener("input", (event) => {
   if (event.target.id === "tag-input") state.tagInput = event.target.value;
   if (event.target.id === "task-title" && state.editor) state.editor.title = event.target.value;
+  if (event.target.id === "task-details" && state.editor) state.editor.details = event.target.value;
   if (event.target.id === "task-date" && state.editor) state.editor.due_date = event.target.value;
 });
 
@@ -231,14 +249,15 @@ app.addEventListener("submit", async (event) => {
     }
     if (event.target.id === "task-form") {
       const title = document.querySelector("#task-title").value;
+      const details = document.querySelector("#task-details").value;
       const dueDate = document.querySelector("#task-date").value || null;
       const tag = state.tagInput.trim().replace(/^#/, "");
       const tags = tag && !state.draftTags.includes(tag) ? [...state.draftTags, tag] : state.draftTags;
-      const payload = { title, color: state.editor.color, tags, dueDate };
+      const payload = { title, details, color: state.editor.color, status: state.editor.status || "none", tags, dueDate };
       const editingId = Number(state.editor.id || 0);
       if (editingId) {
         const localTask = state.tasks.find((task) => task.id === editingId);
-        if (localTask) Object.assign(localTask, { title, color: payload.color, tags, due_date: dueDate });
+        if (localTask) Object.assign(localTask, { title, details, color: payload.color, status: payload.status, tags, due_date: dueDate });
         state.editor = null;
         render();
         saveInBackground(async () => {
@@ -249,8 +268,8 @@ app.addEventListener("submit", async (event) => {
         const temporaryId = nextTemporaryTaskId--;
         const position = state.tasks.reduce((min, task) => Math.min(min, Number(task.position) || 0), 0) - 1;
         state.tasks.unshift({
-          id: temporaryId, identity_code: state.identity, title, color: payload.color, tags,
-          due_date: dueDate, completed: false, completed_at: null, position,
+          id: temporaryId, identity_code: state.identity, title, details, color: payload.color, tags,
+          due_date: dueDate, completed: false, completed_at: null, status: payload.status, position,
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });
         state.editor = null;

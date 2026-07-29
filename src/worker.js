@@ -1,4 +1,5 @@
 const COLORS = new Set(["violet", "mint", "orange", "blue", "rose"]);
+const STATUSES = new Set(["none", "in_progress", "paused"]);
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -11,7 +12,7 @@ function taskFromRow(row) {
   if (!row) return null;
   let tags = [];
   try { tags = JSON.parse(row.tags || "[]"); } catch { tags = []; }
-  return { ...row, completed: Boolean(row.completed), tags };
+  return { ...row, completed: Boolean(row.completed), tags, details: row.details || "", status: row.status || "none" };
 }
 
 function identityFrom(request) {
@@ -31,9 +32,11 @@ function sanitizeTask(input) {
   const tags = Array.isArray(input.tags)
     ? [...new Set(input.tags.map((tag) => String(tag).trim().replace(/^#/, "")).filter(Boolean))].slice(0, 12)
     : [];
+  const details = String(input.details || "").trim().slice(0, 2_000);
+  const status = STATUSES.has(input.status) ? input.status : "none";
   const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.dueDate || "")) ? input.dueDate : null;
   if (!title) throw new Error("请填写事项名称");
-  return { title, color, tags, dueDate };
+  return { title, color, tags, details, status, dueDate };
 }
 
 function taskIdFrom(pathname) {
@@ -77,8 +80,8 @@ async function api(request, env, url) {
       "SELECT COALESCE(MIN(position), 0) AS value FROM tasks WHERE identity_code = ?",
     ).bind(identity).first();
     const inserted = await env.DB.prepare(
-      "INSERT INTO tasks (identity_code, title, color, tags, due_date, position) VALUES (?, ?, ?, ?, ?, ?)",
-    ).bind(identity, task.title, task.color, JSON.stringify(task.tags), task.dueDate, Number(first?.value || 0) - 1).run();
+      "INSERT INTO tasks (identity_code, title, color, tags, details, status, due_date, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).bind(identity, task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, Number(first?.value || 0) - 1).run();
     const created = await taskById(env.DB, Number(inserted.meta.last_row_id), identity);
     return json({ task: created }, 201);
   }
@@ -104,18 +107,26 @@ async function api(request, env, url) {
   if (id && request.method === "PUT") {
     const task = sanitizeTask(await bodyFrom(request));
     const result = await env.DB.prepare(
-      "UPDATE tasks SET title = ?, color = ?, tags = ?, due_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?",
-    ).bind(task.title, task.color, JSON.stringify(task.tags), task.dueDate, id, identity).run();
+      "UPDATE tasks SET title = ?, color = ?, tags = ?, details = ?, status = ?, due_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?",
+    ).bind(task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, id, identity).run();
     if (!result.meta.changes) return json({ error: "事项不存在" }, 404);
     return json({ task: await taskById(env.DB, id, identity) });
   }
 
   if (id && request.method === "PATCH") {
-    const { completed } = await bodyFrom(request);
-    if (typeof completed !== "boolean") return json({ error: "完成状态无效" }, 400);
-    const result = await env.DB.prepare(
-      "UPDATE tasks SET completed = ?, completed_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?",
-    ).bind(completed ? 1 : 0, completed ? new Date().toISOString() : null, id, identity).run();
+    const { completed, status } = await bodyFrom(request);
+    let result;
+    if (typeof completed === "boolean") {
+      result = await env.DB.prepare(
+        "UPDATE tasks SET completed = ?, completed_at = ?, status = CASE WHEN ? THEN 'none' ELSE status END, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?",
+      ).bind(completed ? 1 : 0, completed ? new Date().toISOString() : null, completed ? 1 : 0, id, identity).run();
+    } else if (STATUSES.has(status)) {
+      result = await env.DB.prepare(
+        "UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?",
+      ).bind(status, id, identity).run();
+    } else {
+      return json({ error: "任务状态无效" }, 400);
+    }
     if (!result.meta.changes) return json({ error: "事项不存在" }, 404);
     return json({ task: await taskById(env.DB, id, identity) });
   }
