@@ -1,6 +1,12 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
 const app = document.querySelector("#app");
+const preventPageZoom = (event) => {
+  if (event.type.startsWith("gesture") || event.touches?.length > 1) event.preventDefault();
+};
+document.addEventListener("gesturestart", preventPageZoom, { passive: false });
+document.addEventListener("gesturechange", preventPageZoom, { passive: false });
+document.addEventListener("touchmove", preventPageZoom, { passive: false });
 let pointerDrag = null;
 let suppressCardClickUntil = 0;
 let taskSyncPromise = null;

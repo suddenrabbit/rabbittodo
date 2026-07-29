@@ -168,11 +168,11 @@
   display: block;
   width: 100%;
   max-width: 100%;
-  margin: -2px 0 5px;
+  margin: 0 0 5px;
   overflow: hidden;
   color: #aaa9b4;
   font-size: 11px;
-  line-height: 1.25;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -247,6 +247,14 @@
 }
 
 .status-option.selected { background: #e9e6ff; color: #5f50ce; font-weight: 700; }
+
+@media (max-width: 520px) {
+  .composer > textarea,
+  .composer-row > input,
+  .tag-input-wrap input {
+    font-size: 16px;
+  }
+}
 
 .drag-handle {
   cursor: grab;
