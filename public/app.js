@@ -367,5 +367,12 @@ document.addEventListener("visibilitychange", () => {
 });
 setInterval(() => refreshActiveTasks(), 30_000);
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (sessionStorage.getItem("rabbittodo-sw-reloaded")) return;
+    sessionStorage.setItem("rabbittodo-sw-reloaded", "1");
+    window.location.reload();
+  });
+  navigator.serviceWorker.register("/sw.js").then((registration) => registration.update());
+}
 loadTasks();
