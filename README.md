@@ -71,7 +71,7 @@ chmod +x scripts/export-sqlite-for-d1.sh
 pnpm exec wrangler d1 execute rabbittodo --remote --file=/tmp/rabbittodo-data.sql
 ```
 
-脚本仅导出 `identities` 和 `tasks` 的 INSERT 数据；表结构始终由 `migrations/0001_initial.sql` 管理。导入后在新地址输入原来的身份码，核对任务数、标签、完成状态及排序，再停用旧服务。
+脚本仅导出 `identities` 和 `tasks` 的 INSERT 数据；表结构始终由 `migrations/` 管理。它兼容原百度云服务器的旧 SQLite 结构：若来源库尚未包含 `details` 与 `status` 两列，导入时会分别补为空字符串与 `none`。导入后在新地址输入原来的身份码，核对任务数、标签、完成状态及排序，再停用旧服务。
 
 ## GitHub 自动部署
 
