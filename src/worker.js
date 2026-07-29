@@ -73,12 +73,12 @@ async function api(request, env, url) {
 
   if (request.method === "POST" && pathname === "/api/tasks") {
     const task = sanitizeTask(await bodyFrom(request));
-    const last = await env.DB.prepare(
-      "SELECT COALESCE(MAX(position), 0) AS value FROM tasks WHERE identity_code = ?",
+    const first = await env.DB.prepare(
+      "SELECT COALESCE(MIN(position), 0) AS value FROM tasks WHERE identity_code = ?",
     ).bind(identity).first();
     const inserted = await env.DB.prepare(
       "INSERT INTO tasks (identity_code, title, color, tags, due_date, position) VALUES (?, ?, ?, ?, ?, ?)",
-    ).bind(identity, task.title, task.color, JSON.stringify(task.tags), task.dueDate, Number(last?.value || 0) + 1).run();
+    ).bind(identity, task.title, task.color, JSON.stringify(task.tags), task.dueDate, Number(first?.value || 0) - 1).run();
     const created = await taskById(env.DB, Number(inserted.meta.last_row_id), identity);
     return json({ task: created }, 201);
   }

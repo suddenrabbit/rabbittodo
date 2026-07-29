@@ -92,10 +92,10 @@ function filteredTasks() {
   return tasks.filter((task) => (state.tag === "全部" || task.tags.includes(state.tag)) && (state.color === "全部" || task.color === state.color));
 }
 
-function taskCard(task) {
+function taskCard(task, { sortable = !task.completed } = {}) {
   const overdue = isOverdue(task);
   return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : ""} ${overdue ? "is-overdue" : ""}" data-task-id="${task.id}">
-    <button class="drag-handle" data-action="drag" data-id="${task.id}" aria-label="拖动排序">⠿</button>
+    ${sortable ? `<button class="drag-handle" data-action="drag" data-id="${task.id}" aria-label="拖动排序">⠿</button>` : '<span class="drag-spacer" aria-hidden="true"></span>'}
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
     <div class="task-body"><h3>${escapeHtml(task.title)}</h3><div class="task-meta">
       ${overdue ? '<span class="overdue-badge">超期</span>' : ""}<span class="due"><i class="due-icon">◷</i>${dateLabel(task.due_date)}</span>
@@ -145,10 +145,15 @@ function identityGate() {
 
 function render() {
   const tasks = filteredTasks();
+  const openTasks = tasks.filter((task) => !task.completed);
+  const completedTasks = tasks.filter((task) => task.completed).sort((left, right) => String(right.completed_at || "").localeCompare(String(left.completed_at || "")));
+  const emptyMessage = completedTasks.length && state.status === "all" ? "所有事项均已完成，做得好。" : "这里还没有事项，点击 + 添加第一项吧。";
+  const openList = openTasks.length || !completedTasks.length || state.status === "all" ? `<section class="task-list">${openTasks.map((task) => taskCard(task)).join("") || `<p class="empty-state">${emptyMessage}</p>`}</section>` : "";
+  const taskContent = `${openList}${completedTasks.length ? `<section class="completed-section"><div class="completed-section-title"><span>已完成</span><b>${completedTasks.length}</b></div><section class="task-list completed-task-list">${completedTasks.map((task) => taskCard(task, { sortable: false })).join("")}</section></section>` : ""}${state.view === "today" && state.tasks.some(oldCompleted) ? '<p class="archive-note">较早完成的事项已自动隐藏</p>' : ""}`;
   const heading = { today: "今天", all: "全部事项", profile: "我的" }[state.view];
   app.innerHTML = `<section class="phone"><div class="content-scroll"><header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的身份码"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>${state.identity || "······"}</span></button></header>
     ${state.view === "today" ? progress() : ""}${state.view === "all" ? `<section class="all-summary"><span>所有事项</span><strong>${state.tasks.length}</strong><p>已完成 ${state.tasks.filter((task) => task.completed).length} 项</p></section>` : ""}${["today", "all"].includes(state.view) ? filters() : ""}
-    ${state.view === "profile" ? `<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>我的身份码</p><strong>${state.identity.slice(0, 3)} ${state.identity.slice(3)}</strong><span>此代码仅用于隔离你的待办数据。</span><button data-action="switch-identity">切换身份码</button></section>` : `<section class="task-list">${tasks.map(taskCard).join("") || '<p class="empty-state">这里还没有事项，点击 + 添加第一项吧。</p>'}${state.view === "today" && state.tasks.some(oldCompleted) ? '<p class="archive-note">较早完成的事项已自动隐藏</p>' : ""}</section>`}</div>
+    ${state.view === "profile" ? `<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>我的身份码</p><strong>${state.identity.slice(0, 3)} ${state.identity.slice(3)}</strong><span>此代码仅用于隔离你的待办数据。</span><button data-action="switch-identity">切换身份码</button></section>` : taskContent}</div>
     ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="today" class="${state.view === "today" ? "active" : ""}"><span>◷</span>今日</button><button data-action="view" data-view="all" class="${state.view === "all" ? "active" : ""}"><span>☷</span>全部</button></nav></section>${editor()}${identityGate()}`;
 }
 
@@ -236,8 +241,8 @@ app.addEventListener("submit", async (event) => {
         });
       } else {
         const temporaryId = nextTemporaryTaskId--;
-        const position = state.tasks.reduce((max, task) => Math.max(max, Number(task.position) || 0), 0) + 1;
-        state.tasks.push({
+        const position = state.tasks.reduce((min, task) => Math.min(min, Number(task.position) || 0), 0) - 1;
+        state.tasks.unshift({
           id: temporaryId, identity_code: state.identity, title, color: payload.color, tags,
           due_date: dueDate, completed: false, completed_at: null, position,
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),

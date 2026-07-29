@@ -125,6 +125,39 @@
   box-shadow: 0 7px 19px #e5899024, 0 2px 5px #e5899016;
 }
 
+.drag-spacer {
+  width: 23px;
+  flex: 0 0 23px;
+}
+
+.completed-section {
+  margin-top: 23px;
+}
+
+.completed-section-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 3px 10px;
+  color: #8c8b95;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.completed-section-title b {
+  min-width: 19px;
+  padding: 2px 6px;
+  border-radius: 9px;
+  background: #ecebf2;
+  color: #8e8d98;
+  font-size: 10px;
+  text-align: center;
+}
+
+.completed-task-list {
+  margin-top: 0;
+}
+
 .task-card .task-color-dot {
   width: 9px;
   height: 9px;
