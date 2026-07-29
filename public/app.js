@@ -1,6 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
 const app = document.querySelector("#app");
+let isReloadingForServiceWorker = false;
 const preventPageZoom = (event) => {
   if (event.type.startsWith("gesture") || event.touches?.length > 1) event.preventDefault();
 };
@@ -74,7 +75,7 @@ async function loadTasks({ quiet = false } = {}) {
       state.tasks = (await api("/api/tasks")).tasks;
       lastTaskSyncAt = Date.now();
     } catch (error) {
-      if (!quiet) alert(error.message);
+      if (!quiet && !isReloadingForServiceWorker) alert(error.message);
     } finally {
       taskSyncPromise = null;
     }
@@ -404,11 +405,14 @@ document.addEventListener("visibilitychange", () => {
 setInterval(() => refreshActiveTasks(), 30_000);
 
 if ("serviceWorker" in navigator) {
+  // 旧版本使用 sessionStorage 防重载；移除遗留标记，让之后的每次版本升级都能正常生效。
+  sessionStorage.removeItem("rabbittodo-sw-reloaded");
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (sessionStorage.getItem("rabbittodo-sw-reloaded")) return;
-    sessionStorage.setItem("rabbittodo-sw-reloaded", "1");
+    if (isReloadingForServiceWorker) return;
+    isReloadingForServiceWorker = true;
     window.location.reload();
   });
   navigator.serviceWorker.register("/sw.js").then((registration) => registration.update());
 }
-loadTasks();
+// 首次进入与 Service Worker 切换期间的同步均为后台行为，不弹出瞬时网络中断提示。
+loadTasks({ quiet: true });
