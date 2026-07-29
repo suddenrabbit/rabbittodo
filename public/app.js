@@ -5,6 +5,10 @@ let pointerDrag = null;
 let suppressCardClickUntil = 0;
 let taskSyncPromise = null;
 let lastTaskSyncAt = 0;
+let mutationChain = Promise.resolve();
+let pendingMutations = 0;
+let nextTemporaryTaskId = -1;
+const taskIdAliases = new Map();
 
 const state = {
   identity: localStorage.getItem("todo-identity") || "",
@@ -27,6 +31,35 @@ async function api(path, options = {}) {
   return payload;
 }
 
+// Keep the interface responsive while preserving the order of database writes.
+// A failed write reloads the authoritative server state instead of silently losing work.
+function saveInBackground(operation) {
+  pendingMutations += 1;
+  const run = async () => {
+    try {
+      await operation();
+    } catch (error) {
+      alert(`${error.message}，已恢复服务器中的最新数据。`);
+      await loadTasks({ quiet: true });
+    } finally {
+      pendingMutations -= 1;
+    }
+  };
+  mutationChain = mutationChain.then(run, run);
+  return mutationChain;
+}
+
+function resolvedTaskId(id) {
+  return taskIdAliases.get(Number(id)) || Number(id);
+}
+
+function applyServerTask(task, localId = task.id, shouldRender = false) {
+  if (Number(localId) < 0) taskIdAliases.set(Number(localId), task.id);
+  const index = state.tasks.findIndex((item) => item.id === Number(localId) || item.id === task.id);
+  if (index >= 0) state.tasks[index] = { ...state.tasks[index], ...task };
+  if (shouldRender) render();
+}
+
 async function loadTasks({ quiet = false } = {}) {
   if (!state.identity) return render();
   if (taskSyncPromise) return taskSyncPromise;
@@ -45,7 +78,7 @@ async function loadTasks({ quiet = false } = {}) {
 }
 
 function refreshActiveTasks(force = false) {
-  if (!state.identity || state.editor || pointerDrag || document.visibilityState === "hidden") return;
+  if (!state.identity || state.editor || pointerDrag || pendingMutations || document.visibilityState === "hidden") return;
   // pageshow、focus 与 visibilitychange 往往会连续触发；前台恢复只保留一次读取。
   const interval = force ? 1_500 : 30_000;
   if (Date.now() - lastTaskSyncAt > interval) loadTasks({ quiet: true });
@@ -137,8 +170,29 @@ app.addEventListener("click", async (event) => {
     if (action === "pick-color") { state.editor.color = button.dataset.color; return render(); }
     if (action === "remove-tag") { state.draftTags = state.draftTags.filter((tag) => tag !== button.dataset.tag); return render(); }
     if (action === "switch-identity") { localStorage.removeItem("todo-identity"); state.identity = ""; state.view = "today"; return render(); }
-    if (action === "toggle") { await api(`/api/tasks/${button.dataset.id}`, { method: "PATCH", body: JSON.stringify({ completed: !state.tasks.find((task) => task.id === Number(button.dataset.id)).completed }) }); return loadTasks(); }
-    if (action === "delete-task") { if (confirm("删除这项待办？")) { await api(`/api/tasks/${state.editor.id}`, { method: "DELETE" }); state.editor = null; return loadTasks(); } return; }
+    if (action === "toggle") {
+      const id = Number(button.dataset.id);
+      const task = state.tasks.find((item) => item.id === id);
+      if (!task) return;
+      const completed = !task.completed;
+      task.completed = completed;
+      task.completed_at = completed ? new Date().toISOString() : null;
+      render();
+      saveInBackground(async () => {
+        const response = await api(`/api/tasks/${resolvedTaskId(id)}`, { method: "PATCH", body: JSON.stringify({ completed }) });
+        applyServerTask(response.task, id);
+      });
+      return;
+    }
+    if (action === "delete-task") {
+      if (!confirm("删除这项待办？")) return;
+      const id = Number(state.editor.id);
+      state.tasks = state.tasks.filter((task) => task.id !== id);
+      state.editor = null;
+      render();
+      saveInBackground(() => api(`/api/tasks/${resolvedTaskId(id)}`, { method: "DELETE" }));
+      return;
+    }
     return;
   }
   const card = event.target.closest("[data-task-id]");
@@ -170,8 +224,32 @@ app.addEventListener("submit", async (event) => {
       const tag = state.tagInput.trim().replace(/^#/, "");
       const tags = tag && !state.draftTags.includes(tag) ? [...state.draftTags, tag] : state.draftTags;
       const payload = { title, color: state.editor.color, tags, dueDate };
-      if (state.editor.id) await api(`/api/tasks/${state.editor.id}`, { method: "PUT", body: JSON.stringify(payload) }); else await api("/api/tasks", { method: "POST", body: JSON.stringify(payload) });
-      state.editor = null; return loadTasks();
+      const editingId = Number(state.editor.id || 0);
+      if (editingId) {
+        const localTask = state.tasks.find((task) => task.id === editingId);
+        if (localTask) Object.assign(localTask, { title, color: payload.color, tags, due_date: dueDate });
+        state.editor = null;
+        render();
+        saveInBackground(async () => {
+          const response = await api(`/api/tasks/${resolvedTaskId(editingId)}`, { method: "PUT", body: JSON.stringify(payload) });
+          applyServerTask(response.task, editingId);
+        });
+      } else {
+        const temporaryId = nextTemporaryTaskId--;
+        const position = state.tasks.reduce((max, task) => Math.max(max, Number(task.position) || 0), 0) + 1;
+        state.tasks.push({
+          id: temporaryId, identity_code: state.identity, title, color: payload.color, tags,
+          due_date: dueDate, completed: false, completed_at: null, position,
+          created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        });
+        state.editor = null;
+        render();
+        saveInBackground(async () => {
+          const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(payload) });
+          applyServerTask(response.task, temporaryId, true);
+        });
+      }
+      return;
     }
   } catch (error) { alert(error.message); }
 });
@@ -250,7 +328,7 @@ app.addEventListener("pointermove", (event) => {
   reorderAtPointer(pointerDrag, event.clientY);
 });
 
-async function finishPointerDrag(event) {
+function finishPointerDrag(event) {
   if (!pointerDrag || (event && event.pointerId !== pointerDrag.pointerId)) return;
   const drag = pointerDrag;
   pointerDrag = null;
@@ -269,13 +347,12 @@ async function finishPointerDrag(event) {
   const visibleSet = new Set(visibleIds);
   let visibleIndex = 0;
   const ids = state.tasks.map((task) => visibleSet.has(task.id) ? visibleIds[visibleIndex++] : task.id);
-  try {
-    await api("/api/tasks/reorder", { method: "POST", body: JSON.stringify({ ids }) });
-    await loadTasks();
-  } catch (error) {
-    alert(error.message);
-    await loadTasks();
-  }
+  const tasksById = new Map(state.tasks.map((task) => [task.id, task]));
+  state.tasks = ids.map((id) => tasksById.get(id)).filter(Boolean);
+  saveInBackground(() => api("/api/tasks/reorder", {
+    method: "POST",
+    body: JSON.stringify({ ids: state.tasks.map((task) => resolvedTaskId(task.id)) }),
+  }));
 }
 
 app.addEventListener("pointerup", finishPointerDrag);
