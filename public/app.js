@@ -1,6 +1,6 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260729.232152";
+const APP_VERSION = "v20260729.233701";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 document.documentElement.classList.toggle("is-ipad", isIPad);
@@ -28,7 +28,7 @@ let nextTemporaryTaskId = -1;
 const taskIdAliases = new Map();
 
 const state = {
-  identity: localStorage.getItem("todo-identity") || "",
+  identity: localStorage.getItem("todo-identity") || "", identityDraft: sessionStorage.getItem("todo-identity-draft") || "",
   tasks: [], view: "today", tag: "全部", color: "全部", status: "all", filtersOpen: false, editor: null, draftTags: [], tagInput: "", dragId: null,
 };
 
@@ -172,7 +172,7 @@ function editor() {
 
 function identityGate() {
   if (state.identity) return "";
-  return `<div class="identity-gate"><form class="identity-card" id="identity-form"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>今天，慢一点也没关系</h2><span>输入 6 位身份码，在本设备隔离你的待办数据。</span><input id="identity-code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 位身份码" required /><button class="save-button" type="submit">开始记录</button></form></div>`;
+  return `<div class="identity-gate"><form class="identity-card" id="identity-form"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>今天，慢一点也没关系</h2><span>输入 6 位身份码，在本设备隔离你的待办数据。</span><input id="identity-code" value="${escapeHtml(state.identityDraft)}" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 位身份码" required /><button class="save-button" type="submit">开始记录</button></form></div>`;
 }
 
 function pageHeader(heading) {
@@ -261,6 +261,10 @@ app.addEventListener("keydown", (event) => {
   if (event.key === "Backspace" && !event.target.value && state.draftTags.length) { state.draftTags.pop(); render(); document.querySelector("#tag-input")?.focus(); }
 });
 app.addEventListener("input", (event) => {
+  if (event.target.id === "identity-code") {
+    state.identityDraft = event.target.value;
+    sessionStorage.setItem("todo-identity-draft", state.identityDraft);
+  }
   if (event.target.id === "tag-input") state.tagInput = event.target.value;
   if (event.target.id === "task-title" && state.editor) state.editor.title = event.target.value;
   if (event.target.id === "task-details" && state.editor) state.editor.details = event.target.value;
@@ -272,7 +276,12 @@ app.addEventListener("submit", async (event) => {
   try {
     if (event.target.id === "identity-form") {
       const code = document.querySelector("#identity-code").value;
-      await api("/api/identity", { method: "POST", body: JSON.stringify({ code }) }); localStorage.setItem("todo-identity", code); state.identity = code; return loadTasks();
+      await api("/api/identity", { method: "POST", body: JSON.stringify({ code }) });
+      localStorage.setItem("todo-identity", code);
+      sessionStorage.removeItem("todo-identity-draft");
+      state.identityDraft = "";
+      state.identity = code;
+      return loadTasks();
     }
     if (event.target.id === "task-form") {
       const title = document.querySelector("#task-title").value;
@@ -431,6 +440,10 @@ if ("serviceWorker" in navigator) {
   sessionStorage.removeItem("rabbittodo-sw-reloaded");
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (isReloadingForServiceWorker) return;
+    // 正在输入身份码或编辑任务时，绝不打断用户；更新会在下一次打开应用时生效。
+    if (!state.identity || state.editor) {
+      return;
+    }
     isReloadingForServiceWorker = true;
     window.location.reload();
   });
