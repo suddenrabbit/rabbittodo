@@ -8,6 +8,8 @@ const preventPageZoom = (event) => {
 document.addEventListener("gesturestart", preventPageZoom, { passive: false });
 document.addEventListener("gesturechange", preventPageZoom, { passive: false });
 document.addEventListener("touchmove", preventPageZoom, { passive: false });
+const lockPortrait = () => screen.orientation?.lock?.("portrait").catch(() => {});
+lockPortrait();
 let pointerDrag = null;
 let suppressCardClickUntil = 0;
 let taskSyncPromise = null;
@@ -400,7 +402,10 @@ app.addEventListener("pointercancel", finishPointerDrag);
 window.addEventListener("pageshow", () => refreshActiveTasks(true));
 window.addEventListener("focus", () => refreshActiveTasks(true));
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") refreshActiveTasks(true);
+  if (document.visibilityState === "visible") {
+    lockPortrait();
+    refreshActiveTasks(true);
+  }
 });
 setInterval(() => refreshActiveTasks(), 30_000);
 

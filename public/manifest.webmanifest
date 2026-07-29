@@ -3,6 +3,7 @@
   "short_name": "RabbitToDo",
   "start_url": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#f8f8fa",
   "theme_color": "#6758d7",
   "lang": "zh-CN",
