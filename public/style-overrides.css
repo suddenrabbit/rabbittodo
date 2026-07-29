@@ -258,40 +258,6 @@
   }
 }
 
-/* iPad and other touch-first tablets: use the entire app window, while retaining a readable task column. */
-@media (min-width: 600px) and (pointer: coarse) {
-  .app-shell {
-    align-items: stretch;
-    padding: 0;
-  }
-
-  .phone {
-    width: 100%;
-    height: 100svh;
-    min-height: 100svh;
-    max-height: 100svh;
-    border-radius: 0;
-    box-shadow: none;
-  }
-
-  .content-scroll {
-    padding: max(42px, env(safe-area-inset-top)) clamp(32px, 7vw, 88px) 36px;
-  }
-
-  .content-scroll > * {
-    width: min(100%, 900px);
-    margin-right: auto;
-    margin-left: auto;
-  }
-
-  .tabbar-two {
-    padding-right: max(54px, calc(50% - 250px));
-    padding-left: max(54px, calc(50% - 250px));
-  }
-
-  .composer { width: min(100%, 900px); }
-}
-
 .drag-handle {
   cursor: grab;
   touch-action: none;
@@ -476,6 +442,26 @@ body.is-task-dragging {
   padding: 4px 0 1px;
 }
 
+.workspace,
+.workspace-overview,
+.workspace-tasks {
+  display: contents;
+}
+
+.profile-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.version-label {
+  margin: auto 0 4px;
+  color: #b0afb8;
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: center;
+}
+
 @media (max-width: 520px) {
   .phone {
     height: 100svh;
@@ -486,5 +472,133 @@ body.is-task-dragging {
 
   .content-scroll {
     padding-top: max(42px, env(safe-area-inset-top));
+  }
+}
+
+/* iPad always uses the full app window, including portrait mode. */
+:root.is-ipad .app-shell {
+  align-items: stretch;
+  padding: 0;
+}
+
+:root.is-ipad .phone {
+  width: 100%;
+  height: 100svh;
+  min-height: 100svh;
+  max-height: 100svh;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+:root.is-ipad .content-scroll {
+  padding: max(42px, env(safe-area-inset-top)) clamp(32px, 7vw, 88px) 36px;
+}
+
+:root.is-ipad .workspace,
+:root.is-ipad .profile-page {
+  display: block;
+  width: min(100%, 900px);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+:root.is-ipad .workspace-overview,
+:root.is-ipad .workspace-tasks {
+  display: block;
+}
+
+:root.is-ipad .tabbar-two {
+  padding-right: max(54px, calc(50% - 250px));
+  padding-left: max(54px, calc(50% - 250px));
+}
+
+:root.is-ipad .composer { width: min(100%, 900px); }
+
+/* Landscape touch layouts use a compact overview rail and a dedicated task column. */
+@media (orientation: landscape) {
+  :root:is(.is-touch-device, .is-compact-landscape) .app-shell {
+    align-items: stretch;
+    padding: 0;
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .phone {
+    width: 100%;
+    height: 100svh;
+    min-height: 100svh;
+    max-height: 100svh;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .content-scroll {
+    padding: max(14px, env(safe-area-inset-top)) 16px 18px;
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace {
+    display: grid;
+    grid-template-columns: minmax(226px, .8fr) minmax(0, 1.7fr);
+    align-items: start;
+    gap: 16px;
+    width: 100%;
+    margin: 0;
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview,
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-tasks {
+    display: block;
+    min-width: 0;
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-tasks .task-list { margin-top: 0; }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview .topbar {
+    padding: 0 0 10px;
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview .topbar h1 { font-size: 27px; }
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview .avatar { transform: scale(.88); transform-origin: top right; }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview .progress-card {
+    min-height: 126px;
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview .progress-copy strong { font-size: 34px; }
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview .progress-ring { top: 18px; right: 18px; width: 68px; height: 68px; }
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview .progress-ring::before { width: 56px; height: 56px; }
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview .progress-ring b { font-size: 18px; }
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview .total-count { right: 16px; bottom: 13px; }
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview .filter-panel { margin: 10px 0 0; }
+
+  :root.is-ipad .workspace {
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+    gap: 24px;
+    max-width: none;
+  }
+
+  :root.is-ipad .content-scroll { padding-right: clamp(32px, 6vw, 88px); padding-left: clamp(32px, 6vw, 88px); }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .profile-page {
+    width: min(100%, 680px);
+    margin-right: auto;
+    margin-left: auto;
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .tabbar-two {
+    padding-right: max(54px, calc(50% - 190px));
+    padding-left: max(54px, calc(50% - 190px));
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .modal-backdrop {
+    align-items: center;
+    padding: 12px;
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .composer {
+    width: min(100%, 600px);
+    max-height: calc(100svh - 24px);
+    overflow-y: auto;
+    border-radius: 24px;
   }
 }

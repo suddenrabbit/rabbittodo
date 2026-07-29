@@ -1,6 +1,16 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
+const APP_VERSION = "v20260729.232152";
 const app = document.querySelector("#app");
+const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+document.documentElement.classList.toggle("is-ipad", isIPad);
+document.documentElement.classList.toggle("is-touch-device", navigator.maxTouchPoints > 0 || matchMedia("(pointer: coarse)").matches);
+const updateViewportClasses = () => document.documentElement.classList.toggle(
+  "is-compact-landscape",
+  matchMedia("(orientation: landscape) and (max-height: 600px)").matches,
+);
+updateViewportClasses();
+window.addEventListener("resize", updateViewportClasses);
 let isReloadingForServiceWorker = false;
 const preventPageZoom = (event) => {
   if (event.type.startsWith("gesture") || event.touches?.length > 1) event.preventDefault();
@@ -8,8 +18,6 @@ const preventPageZoom = (event) => {
 document.addEventListener("gesturestart", preventPageZoom, { passive: false });
 document.addEventListener("gesturechange", preventPageZoom, { passive: false });
 document.addEventListener("touchmove", preventPageZoom, { passive: false });
-const lockPortrait = () => screen.orientation?.lock?.("portrait").catch(() => {});
-lockPortrait();
 let pointerDrag = null;
 let suppressCardClickUntil = 0;
 let taskSyncPromise = null;
@@ -167,6 +175,14 @@ function identityGate() {
   return `<div class="identity-gate"><form class="identity-card" id="identity-form"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>今天，慢一点也没关系</h2><span>输入 6 位身份码，在本设备隔离你的待办数据。</span><input id="identity-code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 位身份码" required /><button class="save-button" type="submit">开始记录</button></form></div>`;
 }
 
+function pageHeader(heading) {
+  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的身份码"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>${state.identity || "······"}</span></button></header>`;
+}
+
+function profilePage() {
+  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>我的身份码</p><strong>${state.identity.slice(0, 3)} ${state.identity.slice(3)}</strong><span>此代码仅用于隔离你的待办数据。</span><button data-action="switch-identity">切换身份码</button></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
+}
+
 function render() {
   const retainedAvatar = app.querySelector(".avatar");
   const tasks = filteredTasks();
@@ -176,9 +192,11 @@ function render() {
   const openList = openTasks.length || !completedTasks.length || state.status === "all" ? `<section class="task-list">${openTasks.map((task) => taskCard(task)).join("") || `<p class="empty-state">${emptyMessage}</p>`}</section>` : "";
   const taskContent = `${openList}${completedTasks.length ? `<section class="completed-section"><div class="completed-section-title"><span>已完成</span><b>${completedTasks.length}</b></div><section class="task-list completed-task-list">${completedTasks.map((task) => taskCard(task, { sortable: false })).join("")}</section></section>` : ""}${state.view === "today" && state.tasks.some(oldCompleted) ? '<p class="archive-note">较早完成的事项已自动隐藏</p>' : ""}`;
   const heading = { today: "今天", all: "全部事项", profile: "我的" }[state.view];
-  app.innerHTML = `<section class="phone"><div class="content-scroll"><header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的身份码"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>${state.identity || "······"}</span></button></header>
-    ${state.view === "today" ? progress() : ""}${state.view === "all" ? `<section class="all-summary"><span>所有事项</span><strong>${state.tasks.length}</strong><p>已完成 ${state.tasks.filter((task) => task.completed).length} 项</p></section>` : ""}${["today", "all"].includes(state.view) ? filters() : ""}
-    ${state.view === "profile" ? `<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>我的身份码</p><strong>${state.identity.slice(0, 3)} ${state.identity.slice(3)}</strong><span>此代码仅用于隔离你的待办数据。</span><button data-action="switch-identity">切换身份码</button></section>` : taskContent}</div>
+  const overviewContent = `${pageHeader(heading)}${state.view === "today" ? progress() : ""}${state.view === "all" ? `<section class="all-summary"><span>所有事项</span><strong>${state.tasks.length}</strong><p>已完成 ${state.tasks.filter((task) => task.completed).length} 项</p></section>` : ""}${filters()}`;
+  const pageContent = state.view === "profile"
+    ? profilePage()
+    : `<section class="workspace workspace-${state.view}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}</main></section>`;
+  app.innerHTML = `<section class="phone"><div class="content-scroll">${pageContent}</div>
     ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="today" class="${state.view === "today" ? "active" : ""}"><span>◷</span>今日</button><button data-action="view" data-view="all" class="${state.view === "all" ? "active" : ""}"><span>☷</span>全部</button></nav></section>${editor()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (retainedAvatar && nextAvatar) {
@@ -403,7 +421,6 @@ window.addEventListener("pageshow", () => refreshActiveTasks(true));
 window.addEventListener("focus", () => refreshActiveTasks(true));
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
-    lockPortrait();
     refreshActiveTasks(true);
   }
 });
