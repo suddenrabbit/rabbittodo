@@ -80,6 +80,8 @@
   transform: translateY(-.5px);
 }
 
+.due-label { transform: translateY(1px); }
+
 .tabbar-two {
   justify-content: space-between;
   padding-left: 54px;

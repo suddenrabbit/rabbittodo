@@ -109,7 +109,7 @@ function taskCard(task, { sortable = !task.completed } = {}) {
     ${sortable ? `<button class="drag-handle" data-action="drag" data-id="${task.id}" aria-label="拖动排序">⠿</button>` : '<span class="drag-spacer" aria-hidden="true"></span>'}
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
     <div class="task-body"><h3>${escapeHtml(task.title)}</h3><div class="task-meta">
-      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${overdue ? '<span class="overdue-badge">超期</span>' : ""}${statusBadge}<span class="due"><i class="due-icon">◷</i>${dateLabel(task.due_date)}</span>
+      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${overdue ? '<span class="overdue-badge">超期</span>' : ""}${statusBadge}<span class="due"><i class="due-icon">◷</i><span class="due-label">${dateLabel(task.due_date)}</span></span>
       ${task.tags.map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}
     </div></div><i class="task-color-dot"></i>
   </article>`;
