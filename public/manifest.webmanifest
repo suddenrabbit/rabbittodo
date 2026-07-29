@@ -1,0 +1,17 @@
+{
+  "name": "RabbitToDo",
+  "short_name": "RabbitToDo",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8f8fa",
+  "theme_color": "#6758d7",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/rabbittodo-icon-dock-v4.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

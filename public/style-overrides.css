@@ -1,0 +1,329 @@
+/* Production visual refinements: use layout centering instead of font baselines. */
+.check-button {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.is-completed .check-button {
+  font-size: 0;
+}
+
+.is-completed .check-button::before {
+  content: "✓";
+  display: block;
+  color: #fff;
+  font-family: Arial, sans-serif;
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+.task-card.is-completed.color-violet .check-button { background: #796be2; border-color: #796be2; }
+.task-card.is-completed.color-mint .check-button { background: #66cbb3; border-color: #66cbb3; }
+.task-card.is-completed.color-orange .check-button { background: #eeac60; border-color: #eeac60; }
+.task-card.is-completed.color-blue .check-button { background: #76aad8; border-color: #76aad8; }
+.task-card.is-completed.color-rose .check-button { background: #df80a8; border-color: #df80a8; }
+
+.add-button {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 0;
+  line-height: 1;
+}
+
+.add-button::before {
+  content: "+";
+  display: block;
+  color: #fff;
+  font-family: Arial, sans-serif;
+  font-size: 40px;
+  font-weight: 300;
+  line-height: 1;
+  /* Arial 的 + 字形视觉重心略高，向下补偿后与圆形更居中。 */
+  transform: translateY(1px);
+}
+
+.tabbar {
+  height: 84px;
+  padding-top: 15px;
+}
+
+.tabbar button {
+  gap: 5px;
+  font-size: 11px;
+}
+
+.tabbar button span {
+  font-size: 24px;
+  line-height: 24px;
+}
+
+.add-button {
+  bottom: 48px;
+}
+
+.task-meta .due {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.due-icon {
+  color: #aaa9b4;
+  font-size: 18px;
+  font-style: normal;
+  line-height: 1;
+  transform: translateY(-.5px);
+}
+
+.tabbar-two {
+  justify-content: space-between;
+  padding-left: 54px;
+  padding-right: 54px;
+}
+
+.tabbar-two button {
+  width: 72px;
+}
+
+.task-card {
+  border-width: 1.5px;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+
+.task-card.color-violet {
+  border-color: #c8c0ff;
+  box-shadow: 0 7px 19px #786ae126, 0 2px 5px #786ae11a;
+}
+
+.task-card.color-mint {
+  border-color: #ade5d7;
+  box-shadow: 0 7px 19px #5ac9ae28, 0 2px 5px #5ac9ae16;
+}
+
+.task-card.color-orange {
+  border-color: #f5ce9f;
+  box-shadow: 0 7px 19px #eba94e2b, 0 2px 5px #eba94e18;
+}
+
+.task-card.color-blue {
+  border-color: #b9daf1;
+  box-shadow: 0 7px 19px #6aa9dc2b, 0 2px 5px #6aa9dc18;
+}
+
+.task-card.color-rose {
+  border-color: #efbdd1;
+  box-shadow: 0 7px 19px #db78a62b, 0 2px 5px #db78a618;
+}
+
+.task-card.is-overdue {
+  border-color: #f2bfc4;
+  box-shadow: 0 7px 19px #e5899024, 0 2px 5px #e5899016;
+}
+
+.task-card .task-color-dot {
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 3px #fff;
+}
+
+.drag-handle {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.task-card.is-drag-placeholder {
+  visibility: hidden;
+  box-shadow: none;
+}
+
+body.is-task-dragging {
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.task-drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  margin: 0;
+  pointer-events: none;
+  will-change: transform;
+  transform-origin: center;
+  box-shadow: 0 19px 36px #3d36604d, 0 4px 12px #3d366030;
+  transition: box-shadow .16s ease;
+}
+
+/* Keep the navigation outside the scrollable task area on desktop and mobile Safari. */
+.phone {
+  height: min(780px, calc(100svh - 48px));
+  min-height: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.content-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 42px 20px 28px;
+  scrollbar-width: none;
+}
+
+.content-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.tabbar {
+  position: relative;
+  inset: auto;
+  flex: 0 0 84px;
+}
+
+.add-button {
+  bottom: 48px;
+}
+
+.filter-panel {
+  margin: 16px 0 6px;
+}
+
+.filter-toggle {
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 15px;
+  border: 1px solid #e8e7ee;
+  border-radius: 15px;
+  background: #fff;
+  color: #373640;
+  box-shadow: 0 3px 10px #25234308;
+  text-align: left;
+}
+
+.filter-toggle-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.filter-toggle-summary {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #92919b;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-toggle i {
+  color: #8d8c96;
+  font-size: 16px;
+  font-style: normal;
+  transition: transform .18s ease;
+}
+
+.filter-panel.is-open .filter-toggle i {
+  transform: rotate(180deg);
+}
+
+.brand-inline {
+  color: #6758d7;
+  font-weight: 800;
+  letter-spacing: -.2px;
+}
+
+.identity-symbol {
+  overflow: hidden;
+  background: transparent;
+  box-shadow: 0 8px 22px #6656d13b;
+}
+
+.identity-symbol img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar {
+  width: 48px;
+  height: auto;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  background: transparent;
+  color: #8e8e98;
+}
+
+.avatar-icon,
+.profile-icon {
+  overflow: hidden;
+  background: #6758d7;
+}
+
+.avatar-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  box-shadow: 0 3px 9px #6556d136;
+}
+
+.avatar-icon img,
+.profile-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.18);
+}
+
+.avatar span {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .25px;
+  line-height: 1;
+}
+
+.profile-icon {
+  display: grid;
+  place-items: center;
+}
+
+.filter-panel-content {
+  margin-top: 10px;
+  padding: 4px 0 1px;
+}
+
+@media (max-width: 520px) {
+  .phone {
+    height: 100svh;
+    min-height: 100svh;
+    max-height: 100svh;
+    padding: 0;
+  }
+
+  .content-scroll {
+    padding-top: max(42px, env(safe-area-inset-top));
+  }
+}

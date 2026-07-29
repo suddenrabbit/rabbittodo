@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.dev.vars
+.DS_Store
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sql.bak
