@@ -1,5 +1,7 @@
 const COLORS = new Set(["violet", "mint", "orange", "blue", "rose"]);
 const STATUSES = new Set(["none", "in_progress", "paused"]);
+const IDENTITY_STATUSES = new Set(["pending", "enabled", "disabled"]);
+const DEFAULT_ADMIN_PASSWORD = "zhoumeng1987";
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -46,7 +48,21 @@ function taskIdFrom(pathname) {
 }
 
 async function ensureIdentity(db, code) {
-  await db.prepare("INSERT OR IGNORE INTO identities (code) VALUES (?)").bind(code).run();
+  await db.prepare("INSERT OR IGNORE INTO identities (code, status) VALUES (?, 'pending')").bind(code).run();
+  return db.prepare("SELECT code, status, created_at, reviewed_at FROM identities WHERE code = ?").bind(code).first();
+}
+
+function adminAuthorized(request, env) {
+  const supplied = String(request.headers.get("X-Admin-Password") || "");
+  return supplied && supplied === String(env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD);
+}
+
+function identityBlocked(status) {
+  const pending = status === "pending";
+  return json({
+    error: pending ? "请等待管理员审核确认" : "该身份码已禁用或审核未通过",
+    identityStatus: pending ? "pending" : "disabled",
+  }, 403);
 }
 
 async function taskById(db, id, identity) {
@@ -57,16 +73,49 @@ async function taskById(db, id, identity) {
 async function api(request, env, url) {
   const { pathname } = url;
 
+  if (request.method === "POST" && pathname === "/api/admin/login") {
+    return adminAuthorized(request, env) ? json({ ok: true }) : json({ error: "管理员密码错误" }, 401);
+  }
+
+  if (pathname.startsWith("/api/admin/")) {
+    if (!adminAuthorized(request, env)) return json({ error: "管理员身份验证失败" }, 401);
+
+    if (request.method === "GET" && pathname === "/api/admin/identities") {
+      const { results } = await env.DB.prepare(
+        "SELECT identities.code, identities.status, identities.created_at, identities.reviewed_at, COUNT(tasks.id) AS task_count FROM identities LEFT JOIN tasks ON tasks.identity_code = identities.code GROUP BY identities.code ORDER BY CASE identities.status WHEN 'pending' THEN 0 WHEN 'enabled' THEN 1 ELSE 2 END, identities.created_at DESC",
+      ).all();
+      return json({ identities: results.map((row) => ({ ...row, task_count: Number(row.task_count || 0) })) });
+    }
+
+    const match = pathname.match(/^\/api\/admin\/identities\/(\d{6})$/);
+    if (request.method === "PATCH" && match) {
+      const { status } = await bodyFrom(request);
+      if (!IDENTITY_STATUSES.has(status) || status === "pending") return json({ error: "身份码状态无效" }, 400);
+      const result = await env.DB.prepare(
+        "UPDATE identities SET status = ?, reviewed_at = CURRENT_TIMESTAMP WHERE code = ?",
+      ).bind(status, match[1]).run();
+      if (!result.meta.changes) return json({ error: "身份码不存在" }, 404);
+      const identity = await env.DB.prepare(
+        "SELECT code, status, created_at, reviewed_at FROM identities WHERE code = ?",
+      ).bind(match[1]).first();
+      return json({ identity });
+    }
+
+    return json({ error: "未找到管理接口" }, 404);
+  }
+
   if (request.method === "POST" && pathname === "/api/identity") {
     const { code } = await bodyFrom(request);
     if (!/^\d{6}$/.test(String(code || ""))) return json({ error: "请输入 6 位身份码" }, 400);
-    await ensureIdentity(env.DB, code);
-    return json({ code });
+    const identity = await ensureIdentity(env.DB, String(code));
+    return json({ code: identity.code, status: identity.status }, identity.status === "pending" ? 202 : 200);
   }
 
   const identity = identityFrom(request);
   if (!identity) return json({ error: "请先输入 6 位身份码" }, 401);
-  await ensureIdentity(env.DB, identity);
+  const identityRecord = await env.DB.prepare("SELECT status FROM identities WHERE code = ?").bind(identity).first();
+  if (!identityRecord) return identityBlocked("pending");
+  if (identityRecord.status !== "enabled") return identityBlocked(identityRecord.status);
 
   if (request.method === "GET" && pathname === "/api/tasks") {
     const { results } = await env.DB.prepare(
@@ -144,6 +193,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname.startsWith("/api/")) return await api(request, env, url);
+      if (url.pathname === "/console") return Response.redirect(`${url.origin}/console/`, 308);
       return env.ASSETS.fetch(request);
     } catch (error) {
       console.error(error);

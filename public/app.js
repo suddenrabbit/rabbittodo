@@ -1,6 +1,6 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260730.224941";
+const APP_VERSION = "v20260730.231033";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -37,7 +37,7 @@ const taskIdAliases = new Map();
 
 const state = {
   identity: localStorage.getItem("todo-identity") || "", identityDraft: sessionStorage.getItem("todo-identity-draft") || "",
-  tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
+  identityStatus: "", tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
 };
 
 updateViewportClasses();
@@ -126,8 +126,57 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json", "X-Identity-Code": state.identity, ...(options.headers || {}) },
   });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || "操作未完成");
+  if (!response.ok) {
+    const error = new Error(payload.error || "操作未完成");
+    error.status = response.status;
+    error.identityStatus = payload.identityStatus || "";
+    throw error;
+  }
   return payload;
+}
+
+function showIdentityStatus(code, status) {
+  localStorage.removeItem("todo-identity");
+  state.identity = "";
+  state.identityDraft = code;
+  state.identityStatus = status;
+  state.tasks = [];
+  state.editor = null;
+  state.datePicker = null;
+  sessionStorage.setItem("todo-identity-draft", code);
+  render();
+}
+
+function resetIdentity() {
+  localStorage.removeItem("todo-identity");
+  sessionStorage.removeItem("todo-identity-draft");
+  state.identity = "";
+  state.identityDraft = "";
+  state.identityStatus = "";
+  state.tasks = [];
+  state.view = "todo";
+  render();
+}
+
+function handleIdentityAccessError(error) {
+  if (!error.identityStatus) return false;
+  showIdentityStatus(state.identity || state.identityDraft, error.identityStatus);
+  return true;
+}
+
+async function verifyIdentity(code) {
+  const result = await api("/api/identity", { method: "POST", body: JSON.stringify({ code }) });
+  if (result.status !== "enabled") {
+    showIdentityStatus(code, result.status);
+    return;
+  }
+  localStorage.setItem("todo-identity", code);
+  sessionStorage.removeItem("todo-identity-draft");
+  state.identityDraft = "";
+  state.identityStatus = "";
+  state.identity = code;
+  await loadTasks();
+  reloadForServiceWorkerUpdate();
 }
 
 // Keep the interface responsive while preserving the order of database writes.
@@ -138,6 +187,7 @@ function saveInBackground(operation) {
     try {
       await operation();
     } catch (error) {
+      if (handleIdentityAccessError(error)) return;
       alert(`${error.message}，已恢复服务器中的最新数据。`);
       await loadTasks({ quiet: true });
     } finally {
@@ -168,7 +218,7 @@ async function loadTasks({ quiet = false } = {}) {
       state.tasks = (await api("/api/tasks")).tasks;
       lastTaskSyncAt = Date.now();
     } catch (error) {
-      if (!quiet && !isReloadingForServiceWorker) alert(error.message);
+      if (!handleIdentityAccessError(error) && !quiet && !isReloadingForServiceWorker) alert(error.message);
     } finally {
       taskSyncPromise = null;
     }
@@ -283,6 +333,10 @@ function editor() {
 
 function identityGate() {
   if (state.identity) return "";
+  if (state.identityStatus) {
+    const pending = state.identityStatus === "pending";
+    return `<div class="identity-gate"><section class="identity-card identity-status-card"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>${pending ? "请等待管理员审核确认" : "该身份码暂不可用"}</h2><strong class="identity-code-preview">${escapeHtml(state.identityDraft)}</strong><span>${pending ? "审核通过后即可使用。你可以稍后重新检查状态。" : "该身份码已禁用或审核未通过，请联系管理员。"}</span><button class="save-button" type="button" data-action="recheck-identity">重新检查状态</button><button class="identity-secondary-button" type="button" data-action="reset-identity">更换身份码</button></section></div>`;
+  }
   return `<div class="identity-gate"><form class="identity-card" id="identity-form"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>今天，慢一点也没关系</h2><span>输入 6 位身份码，在本设备隔离你的待办数据。</span><input id="identity-code" value="${escapeHtml(state.identityDraft)}" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 位身份码" required /><button class="save-button" type="submit">开始记录</button></form></div>`;
 }
 
@@ -296,6 +350,7 @@ function profilePage() {
 
 function render() {
   const retainedAvatar = app.querySelector(".avatar");
+  const retainedRabbitImage = app.querySelector(".identity-symbol img") || app.querySelector(".avatar-icon img") || app.querySelector(".app-launch-icon img");
   const tasks = filteredTasks();
   const emptyMessage = state.view === "done" ? "还没有已完成的事项。" : "这里还没有待办事项，点击 + 添加第一项吧。";
   const taskContent = `<section class="task-list">${tasks.map((task) => taskCard(task)).join("") || `<p class="empty-state">${emptyMessage}</p>`}</section>`;
@@ -307,9 +362,19 @@ function render() {
   app.innerHTML = `<section class="phone"><div class="content-scroll">${pageContent}</div>
     ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
-  if (retainedAvatar && nextAvatar) {
+  const nextIdentityImage = app.querySelector(".identity-symbol img");
+  if (nextIdentityImage && retainedRabbitImage) {
+    retainedRabbitImage.alt = nextIdentityImage.alt;
+    nextIdentityImage.replaceWith(retainedRabbitImage);
+  } else if (retainedAvatar && nextAvatar && retainedAvatar.contains(retainedRabbitImage)) {
     retainedAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
     nextAvatar.replaceWith(retainedAvatar);
+  } else {
+    const nextRabbitImage = app.querySelector(".avatar-icon img");
+    if (retainedRabbitImage && nextRabbitImage && retainedRabbitImage !== nextRabbitImage) {
+      retainedRabbitImage.alt = nextRabbitImage.alt;
+      nextRabbitImage.replaceWith(retainedRabbitImage);
+    }
   }
 }
 
@@ -343,7 +408,11 @@ app.addEventListener("click", async (event) => {
     if (action === "pick-date") { state.editor.due_date = button.dataset.date; state.datePicker = null; return render(); }
     if (action === "clear-picker-date" || action === "clear-due-date") { state.editor.due_date = ""; state.datePicker = null; return render(); }
     if (action === "remove-tag") { state.draftTags = state.draftTags.filter((tag) => tag !== button.dataset.tag); return render(); }
-    if (action === "switch-identity") { localStorage.removeItem("todo-identity"); state.identity = ""; state.view = "todo"; return render(); }
+    if (action === "switch-identity" || action === "reset-identity") return resetIdentity();
+    if (action === "recheck-identity") {
+      try { await verifyIdentity(state.identityDraft); } catch (error) { alert(error.message); }
+      return;
+    }
     if (action === "toggle") {
       const id = Number(button.dataset.id);
       const task = state.tasks.find((item) => item.id === id);
@@ -393,13 +462,7 @@ app.addEventListener("submit", async (event) => {
   try {
     if (event.target.id === "identity-form") {
       const code = document.querySelector("#identity-code").value;
-      await api("/api/identity", { method: "POST", body: JSON.stringify({ code }) });
-      localStorage.setItem("todo-identity", code);
-      sessionStorage.removeItem("todo-identity-draft");
-      state.identityDraft = "";
-      state.identity = code;
-      await loadTasks();
-      reloadForServiceWorkerUpdate();
+      await verifyIdentity(code);
       return;
     }
     if (event.target.id === "task-form") {
