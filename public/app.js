@@ -1,6 +1,10 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260730.231033";
+const APP_VERSION = "v20260731.000520";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v29";
+const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
+const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
+const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -20,8 +24,8 @@ const updateViewportClasses = () => {
 let isReloadingForServiceWorker = false;
 let serviceWorkerRegistration = null;
 let serviceWorkerUpdatePromise = null;
-let lastServiceWorkerUpdateAt = 0;
 let serviceWorkerReloadPending = false;
+let serviceWorkerVersionProbeScheduled = false;
 const preventPageZoom = (event) => {
   if (event.type.startsWith("gesture") || event.touches?.length > 1) event.preventDefault();
 };
@@ -34,26 +38,69 @@ let mutationChain = Promise.resolve();
 let pendingMutations = 0;
 let nextTemporaryTaskId = -1;
 const taskIdAliases = new Map();
+let persistentAvatar = null;
+let persistentProfileIcon = null;
+let persistentIdentitySymbol = null;
+const savedIdentity = localStorage.getItem("todo-identity") || "";
 
 const state = {
-  identity: localStorage.getItem("todo-identity") || "", identityDraft: sessionStorage.getItem("todo-identity-draft") || "",
-  identityStatus: "", tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
+  identity: savedIdentity, identityDraft: sessionStorage.getItem("todo-identity-draft") || "",
+  identityStatus: "", identityPromptOpen: !savedIdentity, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
 };
 
 updateViewportClasses();
 window.addEventListener("resize", updateViewportClasses);
 
+function serviceWorkerVersionNumber(value) {
+  return Number(String(value || "").match(/^rabbittodo-v(\d+)$/)?.[1] || 0);
+}
+
+function handleServiceWorkerVersion(version) {
+  if (serviceWorkerVersionNumber(version) <= serviceWorkerVersionNumber(EXPECTED_SERVICE_WORKER_VERSION)) return;
+  serviceWorkerReloadPending = true;
+  reloadForServiceWorkerUpdate();
+}
+
+function probeServiceWorkerVersion() {
+  if (serviceWorkerVersionProbeScheduled || !navigator.serviceWorker?.controller) return;
+  serviceWorkerVersionProbeScheduled = true;
+  setTimeout(() => {
+    serviceWorkerVersionProbeScheduled = false;
+    navigator.serviceWorker.controller?.postMessage({ type: "RABBITTODO_GET_VERSION" });
+  }, 80);
+}
+
+function scheduleServiceWorkerRetry() {
+  const retryFrom = Date.now() - SERVICE_WORKER_CHECK_INTERVAL + SERVICE_WORKER_RETRY_INTERVAL;
+  sessionStorage.setItem(SERVICE_WORKER_CHECK_KEY, String(retryFrom));
+}
+
+function watchServiceWorkerInstallation(registration) {
+  registration.addEventListener("updatefound", () => {
+    const installingWorker = registration.installing;
+    installingWorker?.addEventListener("statechange", () => {
+      if (installingWorker.state === "redundant") scheduleServiceWorkerRetry();
+    });
+  });
+}
+
 function checkForServiceWorkerUpdate() {
   if (!serviceWorkerRegistration || document.visibilityState === "hidden" || !navigator.onLine) return;
-  if (serviceWorkerUpdatePromise || Date.now() - lastServiceWorkerUpdateAt < 3_000) return;
-  lastServiceWorkerUpdateAt = Date.now();
+  const now = Date.now();
+  const lastCheck = Number(sessionStorage.getItem(SERVICE_WORKER_CHECK_KEY) || 0);
+  if (serviceWorkerUpdatePromise || now - lastCheck < SERVICE_WORKER_CHECK_INTERVAL) {
+    probeServiceWorkerVersion();
+    return;
+  }
+  sessionStorage.setItem(SERVICE_WORKER_CHECK_KEY, String(now));
   serviceWorkerUpdatePromise = serviceWorkerRegistration.update()
-    .catch(() => undefined)
+    .then(() => probeServiceWorkerVersion())
+    .catch(() => scheduleServiceWorkerRetry())
     .finally(() => { serviceWorkerUpdatePromise = null; });
 }
 
 function reloadForServiceWorkerUpdate() {
-  if (!serviceWorkerReloadPending || isReloadingForServiceWorker || !state.identity || state.editor || pendingMutations) return;
+  if (!serviceWorkerReloadPending || isReloadingForServiceWorker || !state.identity || state.identityPromptOpen || state.editor || pendingMutations) return;
   isReloadingForServiceWorker = true;
   window.location.reload();
 }
@@ -135,32 +182,49 @@ async function api(path, options = {}) {
   return payload;
 }
 
-function showIdentityStatus(code, status) {
-  localStorage.removeItem("todo-identity");
-  state.identity = "";
+function showIdentityStatus(code, status, { blockCurrent = false } = {}) {
+  if (blockCurrent) {
+    localStorage.removeItem("todo-identity");
+    state.identity = "";
+    state.tasks = [];
+  }
   state.identityDraft = code;
   state.identityStatus = status;
-  state.tasks = [];
+  state.identityPromptOpen = true;
   state.editor = null;
   state.datePicker = null;
   sessionStorage.setItem("todo-identity-draft", code);
   render();
 }
 
-function resetIdentity() {
-  localStorage.removeItem("todo-identity");
+function resetIdentityCandidate() {
   sessionStorage.removeItem("todo-identity-draft");
-  state.identity = "";
   state.identityDraft = "";
   state.identityStatus = "";
-  state.tasks = [];
-  state.view = "todo";
+  render();
+}
+
+function closeIdentityPrompt() {
+  if (!state.identity) return;
+  sessionStorage.removeItem("todo-identity-draft");
+  state.identityDraft = "";
+  state.identityStatus = "";
+  state.identityPromptOpen = false;
+  render();
+  reloadForServiceWorkerUpdate();
+}
+
+function openIdentityPrompt() {
+  sessionStorage.removeItem("todo-identity-draft");
+  state.identityDraft = "";
+  state.identityStatus = "";
+  state.identityPromptOpen = true;
   render();
 }
 
 function handleIdentityAccessError(error) {
   if (!error.identityStatus) return false;
-  showIdentityStatus(state.identity || state.identityDraft, error.identityStatus);
+  showIdentityStatus(state.identity || state.identityDraft, error.identityStatus, { blockCurrent: true });
   return true;
 }
 
@@ -175,6 +239,9 @@ async function verifyIdentity(code) {
   state.identityDraft = "";
   state.identityStatus = "";
   state.identity = code;
+  state.identityPromptOpen = false;
+  state.tasks = [];
+  state.view = "todo";
   await loadTasks();
   reloadForServiceWorkerUpdate();
 }
@@ -228,7 +295,7 @@ async function loadTasks({ quiet = false } = {}) {
 }
 
 function refreshActiveTasks(force = false) {
-  if (!state.identity || state.editor || pendingMutations || document.visibilityState === "hidden") return;
+  if (!state.identity || state.identityPromptOpen || state.editor || pendingMutations || document.visibilityState === "hidden") return;
   // pageshow、focus 与 visibilitychange 往往会连续触发；前台恢复只保留一次读取。
   const interval = force ? 1_500 : 30_000;
   if (Date.now() - lastTaskSyncAt > interval) loadTasks({ quiet: true });
@@ -332,12 +399,13 @@ function editor() {
 }
 
 function identityGate() {
-  if (state.identity) return "";
+  if (!state.identityPromptOpen) return "";
+  const closeButton = state.identity ? '<button class="identity-close-button" type="button" data-action="close-identity" aria-label="关闭身份码窗口">×</button>' : "";
   if (state.identityStatus) {
     const pending = state.identityStatus === "pending";
-    return `<div class="identity-gate"><section class="identity-card identity-status-card"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>${pending ? "请等待管理员审核确认" : "该身份码暂不可用"}</h2><strong class="identity-code-preview">${escapeHtml(state.identityDraft)}</strong><span>${pending ? "审核通过后即可使用。你可以稍后重新检查状态。" : "该身份码已禁用或审核未通过，请联系管理员。"}</span><button class="save-button" type="button" data-action="recheck-identity">重新检查状态</button><button class="identity-secondary-button" type="button" data-action="reset-identity">更换身份码</button></section></div>`;
+    return `<div class="identity-gate"><section class="identity-card identity-status-card">${closeButton}<div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>${pending ? "请等待管理员审核确认" : "该身份码暂不可用"}</h2><strong class="identity-code-preview">${escapeHtml(state.identityDraft)}</strong><span>${pending ? "审核通过后即可使用。你可以稍后重新检查状态。" : "该身份码已禁用或审核未通过，请联系管理员。"}</span><button class="save-button" type="button" data-action="recheck-identity">重新检查状态</button><button class="identity-secondary-button" type="button" data-action="reset-identity">更换身份码</button></section></div>`;
   }
-  return `<div class="identity-gate"><form class="identity-card" id="identity-form"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>今天，慢一点也没关系</h2><span>输入 6 位身份码，在本设备隔离你的待办数据。</span><input id="identity-code" value="${escapeHtml(state.identityDraft)}" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 位身份码" required /><button class="save-button" type="submit">开始记录</button></form></div>`;
+  return `<div class="identity-gate"><form class="identity-card" id="identity-form">${closeButton}<div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>今天，慢一点也没关系</h2><span>输入 6 位身份码，在本设备隔离你的待办数据。</span><input id="identity-code" value="${escapeHtml(state.identityDraft)}" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 位身份码" required /><button class="save-button" type="submit">开始记录</button></form></div>`;
 }
 
 function pageHeader(heading) {
@@ -349,8 +417,9 @@ function profilePage() {
 }
 
 function render() {
-  const retainedAvatar = app.querySelector(".avatar");
-  const retainedRabbitImage = app.querySelector(".identity-symbol img") || app.querySelector(".avatar-icon img") || app.querySelector(".app-launch-icon img");
+  persistentAvatar = app.querySelector(".avatar") || persistentAvatar;
+  persistentProfileIcon = app.querySelector(".profile-icon") || persistentProfileIcon;
+  persistentIdentitySymbol = app.querySelector(".identity-symbol") || persistentIdentitySymbol;
   const tasks = filteredTasks();
   const emptyMessage = state.view === "done" ? "还没有已完成的事项。" : "这里还没有待办事项，点击 + 添加第一项吧。";
   const taskContent = `<section class="task-list">${tasks.map((task) => taskCard(task)).join("") || `<p class="empty-state">${emptyMessage}</p>`}</section>`;
@@ -362,20 +431,16 @@ function render() {
   app.innerHTML = `<section class="phone"><div class="content-scroll">${pageContent}</div>
     ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
-  const nextIdentityImage = app.querySelector(".identity-symbol img");
-  if (nextIdentityImage && retainedRabbitImage) {
-    retainedRabbitImage.alt = nextIdentityImage.alt;
-    nextIdentityImage.replaceWith(retainedRabbitImage);
-  } else if (retainedAvatar && nextAvatar && retainedAvatar.contains(retainedRabbitImage)) {
-    retainedAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
-    nextAvatar.replaceWith(retainedAvatar);
-  } else {
-    const nextRabbitImage = app.querySelector(".avatar-icon img");
-    if (retainedRabbitImage && nextRabbitImage && retainedRabbitImage !== nextRabbitImage) {
-      retainedRabbitImage.alt = nextRabbitImage.alt;
-      nextRabbitImage.replaceWith(retainedRabbitImage);
-    }
-  }
+  if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
+    persistentAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
+    nextAvatar.replaceWith(persistentAvatar);
+  } else if (nextAvatar) persistentAvatar = nextAvatar;
+  const nextProfileIcon = app.querySelector(".profile-icon");
+  if (persistentProfileIcon && nextProfileIcon && persistentProfileIcon !== nextProfileIcon) nextProfileIcon.replaceWith(persistentProfileIcon);
+  else if (nextProfileIcon) persistentProfileIcon = nextProfileIcon;
+  const nextIdentitySymbol = app.querySelector(".identity-symbol");
+  if (persistentIdentitySymbol && nextIdentitySymbol && persistentIdentitySymbol !== nextIdentitySymbol) nextIdentitySymbol.replaceWith(persistentIdentitySymbol);
+  else if (nextIdentitySymbol) persistentIdentitySymbol = nextIdentitySymbol;
 }
 
 function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "", pinned: false, pinned_at: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned) }; state.datePicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
@@ -408,7 +473,9 @@ app.addEventListener("click", async (event) => {
     if (action === "pick-date") { state.editor.due_date = button.dataset.date; state.datePicker = null; return render(); }
     if (action === "clear-picker-date" || action === "clear-due-date") { state.editor.due_date = ""; state.datePicker = null; return render(); }
     if (action === "remove-tag") { state.draftTags = state.draftTags.filter((tag) => tag !== button.dataset.tag); return render(); }
-    if (action === "switch-identity" || action === "reset-identity") return resetIdentity();
+    if (action === "switch-identity") return openIdentityPrompt();
+    if (action === "reset-identity") return resetIdentityCandidate();
+    if (action === "close-identity") return closeIdentityPrompt();
     if (action === "recheck-identity") {
       try { await verifyIdentity(state.identityDraft); } catch (error) { alert(error.message); }
       return;
@@ -527,15 +594,15 @@ setInterval(() => refreshActiveTasks(), 30_000);
 if ("serviceWorker" in navigator) {
   // 旧版本使用 sessionStorage 防重载；移除遗留标记，让之后的每次版本升级都能正常生效。
   sessionStorage.removeItem("rabbittodo-sw-reloaded");
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (isReloadingForServiceWorker) return;
-    serviceWorkerReloadPending = true;
-    // 输入身份码、编辑任务或仍有保存请求时不打断用户，安全后自动刷新。
-    reloadForServiceWorkerUpdate();
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data?.type === "RABBITTODO_SW_VERSION") handleServiceWorkerVersion(event.data.version);
   });
+  navigator.serviceWorker.addEventListener("controllerchange", () => probeServiceWorkerVersion());
   navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).then((registration) => {
     serviceWorkerRegistration = registration;
-    return registration.update();
+    watchServiceWorkerInstallation(registration);
+    checkForServiceWorkerUpdate();
+    probeServiceWorkerVersion();
   }).catch(() => undefined);
 }
 // 首次进入与 Service Worker 切换期间的同步均为后台行为，不弹出瞬时网络中断提示。
