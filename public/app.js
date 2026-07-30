@@ -1,6 +1,6 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260730.220032";
+const APP_VERSION = "v20260730.224941";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -188,13 +188,19 @@ function filteredTasks() {
   const tasks = state.tasks.filter((task) => state.view === "done" ? task.completed : !task.completed);
   return tasks
     .filter((task) => (state.tag === "全部" || task.tags.includes(state.tag)) && (state.color === "全部" || task.color === state.color))
-    .sort(compareTasks);
+    .sort(state.view === "done" ? compareCompletedTasks : compareTodoTasks);
 }
 
-function compareTasks(left, right) {
+function timestampValue(value) {
+  if (!value) return 0;
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? `${value.replace(" ", "T")}Z` : value;
+  return Date.parse(normalized) || 0;
+}
+
+function compareTodoTasks(left, right) {
   if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
   if (left.pinned && right.pinned) {
-    const pinnedOrder = String(right.pinned_at || "").localeCompare(String(left.pinned_at || ""));
+    const pinnedOrder = timestampValue(right.pinned_at) - timestampValue(left.pinned_at);
     if (pinnedOrder) return pinnedOrder;
   }
   if (Boolean(left.due_date) !== Boolean(right.due_date)) return left.due_date ? -1 : 1;
@@ -205,6 +211,14 @@ function compareTasks(left, right) {
   const statusRank = { in_progress: 0, none: 1, paused: 2 };
   const statusOrder = (statusRank[left.status || "none"] ?? 1) - (statusRank[right.status || "none"] ?? 1);
   if (statusOrder) return statusOrder;
+  const createdOrder = timestampValue(right.created_at) - timestampValue(left.created_at);
+  if (createdOrder) return createdOrder;
+  return Number(right.id) - Number(left.id);
+}
+
+function compareCompletedTasks(left, right) {
+  const completedOrder = timestampValue(right.completed_at) - timestampValue(left.completed_at);
+  if (completedOrder) return completedOrder;
   return Number(right.id) - Number(left.id);
 }
 
