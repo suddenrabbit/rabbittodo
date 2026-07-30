@@ -1,6 +1,6 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260730.112302";
+const APP_VERSION = "v20260730.120509";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -136,13 +136,12 @@ function taskCard(task, { sortable = !task.completed } = {}) {
   </article>`;
 }
 
-function progress() {
-  const todayTasks = state.tasks.filter((task) => !oldCompleted(task) && (!task.due_date || task.due_date <= today() || task.completed));
-  const done = todayTasks.filter((task) => task.completed).length;
-  const percent = todayTasks.length ? Math.round(done / todayTasks.length * 100) : 0;
+function progress({ title = "今日事项", tasks = state.tasks.filter((task) => !oldCompleted(task) && (!task.due_date || task.due_date <= today() || task.completed)), showTotal = true } = {}) {
+  const done = tasks.filter((task) => task.completed).length;
+  const percent = tasks.length ? Math.round(done / tasks.length * 100) : 0;
   const allDone = state.tasks.filter((task) => task.completed).length;
-  return `<section class="progress-card"><div class="progress-copy"><span>今日事项</span><strong>${done}<small> / ${todayTasks.length}</small></strong><p>已完成</p></div>
-    <div class="progress-ring" style="--progress:${percent}%"><div><b>${percent}</b><span>%</span></div></div><div class="total-count">总事项 <b>${allDone}</b> / ${state.tasks.length}</div></section>`;
+  return `<section class="progress-card"><div class="progress-copy"><span>${title}</span><strong>${done}<small> / ${tasks.length}</small></strong><p>已完成</p></div>
+    <div class="progress-ring" style="--progress:${percent}%"><div><b>${percent}</b><span>%</span></div></div>${showTotal ? `<div class="total-count">总事项 <b>${allDone}</b> / ${state.tasks.length}</div>` : ""}</section>`;
 }
 
 function filters() {
@@ -203,7 +202,7 @@ function render() {
   const openList = openTasks.length || !completedTasks.length || state.status === "all" ? `<section class="task-list">${openTasks.map((task) => taskCard(task)).join("") || `<p class="empty-state">${emptyMessage}</p>`}</section>` : "";
   const taskContent = `${openList}${completedTasks.length ? `<section class="completed-section"><div class="completed-section-title"><span>已完成</span><b>${completedTasks.length}</b></div><section class="task-list completed-task-list">${completedTasks.map((task) => taskCard(task, { sortable: false })).join("")}</section></section>` : ""}${state.view === "today" && state.tasks.some(oldCompleted) ? '<p class="archive-note">较早完成的事项已自动隐藏</p>' : ""}`;
   const heading = { today: "今天", all: "全部事项", profile: "我的" }[state.view];
-  const overviewContent = `${pageHeader(heading)}${state.view === "today" ? progress() : ""}${state.view === "all" ? `<section class="all-summary"><span>所有事项</span><strong>${state.tasks.length}</strong><p>已完成 ${state.tasks.filter((task) => task.completed).length} 项</p></section>` : ""}${filters()}`;
+  const overviewContent = `${pageHeader(heading)}${state.view === "today" ? progress() : ""}${state.view === "all" ? progress({ title: "全部事项", tasks: state.tasks, showTotal: false }) : ""}${filters()}`;
   const pageContent = state.view === "profile"
     ? profilePage()
     : `<section class="workspace workspace-${state.view}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}</main></section>`;
