@@ -1,6 +1,6 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260730.172930";
+const APP_VERSION = "v20260730.182642";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -34,7 +34,7 @@ const taskIdAliases = new Map();
 
 const state = {
   identity: localStorage.getItem("todo-identity") || "", identityDraft: sessionStorage.getItem("todo-identity-draft") || "",
-  tasks: [], view: "today", tag: "全部", color: "全部", status: "all", filtersOpen: false, editor: null, draftTags: [], tagInput: "", dragId: null,
+  tasks: [], view: "today", tag: "全部", color: "全部", status: "all", filtersOpen: false, editor: null, datePicker: null, draftTags: [], tagInput: "", dragId: null,
 };
 
 function checkForServiceWorkerUpdate() {
@@ -66,6 +66,35 @@ const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => (
 const dateLabel = (date) => date === today() ? "今天" : date ? date.slice(5).replace("-", "月") + "日" : "未安排";
 const isOverdue = (task) => !task.completed && task.due_date && task.due_date < today();
 const oldCompleted = (task) => task.completed && task.completed_at && dateInShanghai(task.completed_at) !== today();
+
+function addDays(date, amount) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + amount);
+  return value.toISOString().slice(0, 10);
+}
+
+function shiftMonth(monthKey, amount) {
+  const [year, month] = monthKey.split("-").map(Number);
+  const value = new Date(Date.UTC(year, month - 1 + amount, 1));
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function datePicker() {
+  if (!state.datePicker) return "";
+  const monthKey = state.datePicker.month;
+  const [year, month] = monthKey.split("-").map(Number);
+  const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const selected = state.editor?.due_date || "";
+  const dates = Array.from({ length: firstWeekday + daysInMonth }, (_, index) => {
+    if (index < firstWeekday) return '<span class="calendar-day is-empty" aria-hidden="true"></span>';
+    const day = index - firstWeekday + 1;
+    const date = `${monthKey}-${String(day).padStart(2, "0")}`;
+    const classes = ["calendar-day", date === selected ? "is-selected" : "", date === today() ? "is-today" : ""].filter(Boolean).join(" ");
+    return `<button type="button" class="${classes}" data-action="pick-date" data-date="${date}">${day}</button>`;
+  }).join("");
+  return `<div class="date-picker-backdrop"><section class="date-picker-sheet" role="dialog" aria-modal="true" aria-label="选择计划完成日期"><div class="sheet-grabber"></div><div class="date-picker-head"><button type="button" data-action="close-date-picker">取消</button><strong>${year}年${month}月</strong><button type="button" data-action="clear-picker-date">不设置</button></div><div class="calendar-nav"><button type="button" data-action="previous-calendar-month" aria-label="上个月">‹</button><span>${year}年${month}月</span><button type="button" data-action="next-calendar-month" aria-label="下个月">›</button></div><div class="calendar-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div class="calendar-grid">${dates}</div><div class="calendar-shortcuts"><button type="button" data-action="pick-date" data-date="${today()}">今天</button><button type="button" data-action="pick-date" data-date="${addDays(today(), 1)}">明天</button></div></section></div>`;
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -191,11 +220,14 @@ function statusEditor(task) {
 function editor() {
   if (!state.editor) return "";
   const task = state.editor;
+  const dueDateControl = task.due_date
+    ? `<button type="button" class="due-date-value" data-action="open-date-picker"><i>◷</i>${dateLabel(task.due_date)}</button><button type="button" class="clear-date-button" data-action="clear-due-date">清除</button>`
+    : '<button type="button" class="set-date-button" data-action="open-date-picker">设置日期</button>';
   return `<div class="modal-backdrop"><form class="composer" id="task-form"><div class="sheet-grabber"></div><div class="composer-head"><h2>${task.id ? "编辑事项" : "新建事项"}</h2><button type="button" data-action="close-editor">取消</button></div>
     <input id="task-title" value="${escapeHtml(task.title)}" placeholder="想完成什么？" autofocus required maxlength="200" />
     <textarea id="task-details" placeholder="补充任务详情（可选）" maxlength="2000">${escapeHtml(task.details || "")}</textarea>
     <div class="composer-row"><span>颜色标签</span><div class="color-options">${COLORS.map((color) => `<button type="button" class="color-picker ${color} ${task.color === color ? "selected" : ""}" data-action="pick-color" data-color="${color}">${task.color === color ? "✓" : ""}</button>`).join("")}</div></div>
-    ${task.completed ? "" : statusEditor(task)}${tagsEditor()}<div class="composer-row due-date-row"><span>计划完成</span><div class="due-date-control">${task.due_date ? `<input id="task-date" type="date" value="${task.due_date}" /><button type="button" class="clear-date-button" data-action="clear-due-date">清除</button>` : '<input id="task-date" class="empty-date-input" type="date" value="" aria-label="设置计划完成日期" /><span class="set-date-button">设置日期</span>'}</div></div>
+    ${task.completed ? "" : statusEditor(task)}${tagsEditor()}<div class="composer-row due-date-row"><span>计划完成</span><div class="due-date-control">${dueDateControl}</div></div>
     ${task.id ? '<button type="button" class="delete-button" data-action="delete-task">删除事项</button>' : ""}<button class="save-button" type="submit">${task.id ? "保存修改" : "添加事项"}</button>
   </form></div>`;
 }
@@ -227,7 +259,7 @@ function render() {
     ? profilePage()
     : `<section class="workspace workspace-${state.view}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}</main></section>`;
   app.innerHTML = `<section class="phone"><div class="content-scroll">${pageContent}</div>
-    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="today" class="${state.view === "today" ? "active" : ""}"><span>◷</span>今日</button><button data-action="view" data-view="all" class="${state.view === "all" ? "active" : ""}"><span>☷</span>全部</button></nav></section>${editor()}${identityGate()}`;
+    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="today" class="${state.view === "today" ? "active" : ""}"><span>◷</span>今日</button><button data-action="view" data-view="all" class="${state.view === "all" ? "active" : ""}"><span>☷</span>全部</button></nav></section>${editor()}${datePicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (retainedAvatar && nextAvatar) {
     retainedAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
@@ -235,7 +267,7 @@ function render() {
   }
 }
 
-function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "" }) { state.editor = { ...task, status: task.status || "none" }; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
+function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "" }) { state.editor = { ...task, status: task.status || "none" }; state.datePicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
 function commitTag() { const tag = state.tagInput.trim().replace(/^#/, ""); if (tag && !state.draftTags.includes(tag)) state.draftTags.push(tag); state.tagInput = ""; render(); document.querySelector("#tag-input")?.focus(); }
 
 app.addEventListener("click", async (event) => {
@@ -245,6 +277,7 @@ app.addEventListener("click", async (event) => {
     if (action === "add") return openEditor();
     if (action === "close-editor") {
       state.editor = null;
+      state.datePicker = null;
       render();
       reloadForServiceWorkerUpdate();
       return;
@@ -257,7 +290,12 @@ app.addEventListener("click", async (event) => {
     if (action === "color-filter") { state.color = button.dataset.color; return render(); }
     if (action === "pick-color") { state.editor.color = button.dataset.color; return render(); }
     if (action === "pick-task-status") { state.editor.status = button.dataset.status; return render(); }
-    if (action === "clear-due-date") { state.editor.due_date = ""; return render(); }
+    if (action === "open-date-picker") { state.datePicker = { month: (state.editor.due_date || today()).slice(0, 7) }; return render(); }
+    if (action === "close-date-picker") { state.datePicker = null; return render(); }
+    if (action === "previous-calendar-month") { state.datePicker.month = shiftMonth(state.datePicker.month, -1); return render(); }
+    if (action === "next-calendar-month") { state.datePicker.month = shiftMonth(state.datePicker.month, 1); return render(); }
+    if (action === "pick-date") { state.editor.due_date = button.dataset.date; state.datePicker = null; return render(); }
+    if (action === "clear-picker-date" || action === "clear-due-date") { state.editor.due_date = ""; state.datePicker = null; return render(); }
     if (action === "remove-tag") { state.draftTags = state.draftTags.filter((tag) => tag !== button.dataset.tag); return render(); }
     if (action === "switch-identity") { localStorage.removeItem("todo-identity"); state.identity = ""; state.view = "today"; return render(); }
     if (action === "toggle") {
@@ -304,15 +342,7 @@ app.addEventListener("input", (event) => {
   if (event.target.id === "tag-input") state.tagInput = event.target.value;
   if (event.target.id === "task-title" && state.editor) state.editor.title = event.target.value;
   if (event.target.id === "task-details" && state.editor) state.editor.details = event.target.value;
-  if (event.target.id === "task-date" && state.editor) state.editor.due_date = event.target.value;
 });
-app.addEventListener("change", (event) => {
-  if (event.target.id === "task-date" && state.editor) {
-    state.editor.due_date = event.target.value;
-    render();
-  }
-});
-
 app.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -330,7 +360,7 @@ app.addEventListener("submit", async (event) => {
     if (event.target.id === "task-form") {
       const title = document.querySelector("#task-title").value;
       const details = document.querySelector("#task-details").value;
-      const dueDate = document.querySelector("#task-date")?.value || null;
+      const dueDate = state.editor.due_date || null;
       const tag = state.tagInput.trim().replace(/^#/, "");
       const tags = tag && !state.draftTags.includes(tag) ? [...state.draftTags, tag] : state.draftTags;
       const payload = { title, details, color: state.editor.color, status: state.editor.status || "none", tags, dueDate };
