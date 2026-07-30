@@ -1,6 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260729.234939";
+const APP_VERSION = "v20260730.105113";
+const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 document.documentElement.classList.toggle("is-ipad", isIPad);
@@ -32,11 +33,20 @@ const state = {
   tasks: [], view: "today", tag: "全部", color: "全部", status: "all", filtersOpen: false, editor: null, draftTags: [], tagInput: "", dragId: null,
 };
 
-const today = () => new Date().toISOString().slice(0, 10);
+function dateInShanghai(value = new Date()) {
+  const normalizedValue = typeof value === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+    ? `${value.replace(" ", "T")}Z`
+    : value;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: SHANGHAI_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date(normalizedValue)).filter(({ type }) => type !== "literal").map(({ type, value: part }) => [type, part]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+const today = () => dateInShanghai();
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
 const dateLabel = (date) => date === today() ? "今天" : date ? date.slice(5).replace("-", "月") + "日" : "未安排";
 const isOverdue = (task) => !task.completed && task.due_date && task.due_date < today();
-const oldCompleted = (task) => task.completed && task.completed_at && task.completed_at.slice(0, 10) !== today();
+const oldCompleted = (task) => task.completed && task.completed_at && dateInShanghai(task.completed_at) !== today();
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -176,7 +186,7 @@ function identityGate() {
 }
 
 function pageHeader(heading) {
-  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的身份码"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>${state.identity || "······"}</span></button></header>`;
+  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的身份码"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>${state.identity || "······"}</span></button></header>`;
 }
 
 function profilePage() {
