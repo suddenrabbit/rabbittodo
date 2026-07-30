@@ -1,6 +1,6 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260730.120509";
+const APP_VERSION = "v20260730.124724";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -13,6 +13,10 @@ const updateViewportClasses = () => document.documentElement.classList.toggle(
 updateViewportClasses();
 window.addEventListener("resize", updateViewportClasses);
 let isReloadingForServiceWorker = false;
+let serviceWorkerRegistration = null;
+let serviceWorkerUpdatePromise = null;
+let lastServiceWorkerUpdateAt = 0;
+let serviceWorkerReloadPending = false;
 const preventPageZoom = (event) => {
   if (event.type.startsWith("gesture") || event.touches?.length > 1) event.preventDefault();
 };
@@ -32,6 +36,21 @@ const state = {
   identity: localStorage.getItem("todo-identity") || "", identityDraft: sessionStorage.getItem("todo-identity-draft") || "",
   tasks: [], view: "today", tag: "全部", color: "全部", status: "all", filtersOpen: false, editor: null, draftTags: [], tagInput: "", dragId: null,
 };
+
+function checkForServiceWorkerUpdate() {
+  if (!serviceWorkerRegistration || document.visibilityState === "hidden" || !navigator.onLine) return;
+  if (serviceWorkerUpdatePromise || Date.now() - lastServiceWorkerUpdateAt < 3_000) return;
+  lastServiceWorkerUpdateAt = Date.now();
+  serviceWorkerUpdatePromise = serviceWorkerRegistration.update()
+    .catch(() => undefined)
+    .finally(() => { serviceWorkerUpdatePromise = null; });
+}
+
+function reloadForServiceWorkerUpdate() {
+  if (!serviceWorkerReloadPending || isReloadingForServiceWorker || !state.identity || state.editor || pendingMutations) return;
+  isReloadingForServiceWorker = true;
+  window.location.reload();
+}
 
 function dateInShanghai(value = new Date()) {
   const normalizedValue = typeof value === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
@@ -70,6 +89,7 @@ function saveInBackground(operation) {
       await loadTasks({ quiet: true });
     } finally {
       pendingMutations -= 1;
+      reloadForServiceWorkerUpdate();
     }
   };
   mutationChain = mutationChain.then(run, run);
@@ -223,7 +243,12 @@ app.addEventListener("click", async (event) => {
   if (button) {
     const action = button.dataset.action;
     if (action === "add") return openEditor();
-    if (action === "close-editor") { state.editor = null; return render(); }
+    if (action === "close-editor") {
+      state.editor = null;
+      render();
+      reloadForServiceWorkerUpdate();
+      return;
+    }
     if (action === "view") { state.view = button.dataset.view; return render(); }
     if (action === "profile") { state.view = "profile"; return render(); }
     if (action === "toggle-filters") { state.filtersOpen = !state.filtersOpen; return render(); }
@@ -298,7 +323,9 @@ app.addEventListener("submit", async (event) => {
       sessionStorage.removeItem("todo-identity-draft");
       state.identityDraft = "";
       state.identity = code;
-      return loadTasks();
+      await loadTasks();
+      reloadForServiceWorkerUpdate();
+      return;
     }
     if (event.target.id === "task-form") {
       const title = document.querySelector("#task-title").value;
@@ -443,11 +470,18 @@ app.addEventListener("pointercancel", finishPointerDrag);
 
 // Installed PWAs are often resumed from a frozen page instead of reloaded.
 // Refresh on every foreground return and poll gently while the app stays open.
-window.addEventListener("pageshow", () => refreshActiveTasks(true));
-window.addEventListener("focus", () => refreshActiveTasks(true));
+window.addEventListener("pageshow", () => {
+  refreshActiveTasks(true);
+  checkForServiceWorkerUpdate();
+});
+window.addEventListener("focus", () => {
+  refreshActiveTasks(true);
+  checkForServiceWorkerUpdate();
+});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     refreshActiveTasks(true);
+    checkForServiceWorkerUpdate();
   }
 });
 setInterval(() => refreshActiveTasks(), 30_000);
@@ -457,14 +491,14 @@ if ("serviceWorker" in navigator) {
   sessionStorage.removeItem("rabbittodo-sw-reloaded");
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (isReloadingForServiceWorker) return;
-    // 正在输入身份码或编辑任务时，绝不打断用户；更新会在下一次打开应用时生效。
-    if (!state.identity || state.editor) {
-      return;
-    }
-    isReloadingForServiceWorker = true;
-    window.location.reload();
+    serviceWorkerReloadPending = true;
+    // 输入身份码、编辑任务或仍有保存请求时不打断用户，安全后自动刷新。
+    reloadForServiceWorkerUpdate();
   });
-  navigator.serviceWorker.register("/sw.js").then((registration) => registration.update());
+  navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).then((registration) => {
+    serviceWorkerRegistration = registration;
+    return registration.update();
+  }).catch(() => undefined);
 }
 // 首次进入与 Service Worker 切换期间的同步均为后台行为，不弹出瞬时网络中断提示。
 loadTasks({ quiet: true });
