@@ -1,6 +1,6 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260730.105247";
+const APP_VERSION = "v20260730.112302";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -125,11 +125,12 @@ function taskCard(task, { sortable = !task.completed } = {}) {
   const statusBadge = !task.completed && status !== "none"
     ? `<span class="status-badge ${status}">${status === "in_progress" ? "进行中" : "暂停"}</span>`
     : "";
+  const due = task.due_date ? `<span class="due"><i class="due-icon">◷</i><span class="due-label">${dateLabel(task.due_date)}</span></span>` : "";
   return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : ""} ${overdue ? "is-overdue" : ""}" data-task-id="${task.id}">
     ${sortable ? `<button class="drag-handle" data-action="drag" data-id="${task.id}" aria-label="拖动排序">⠿</button>` : '<span class="drag-spacer" aria-hidden="true"></span>'}
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
     <div class="task-body"><h3>${escapeHtml(task.title)}</h3><div class="task-meta">
-      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${overdue ? '<span class="overdue-badge">超期</span>' : ""}${statusBadge}<span class="due"><i class="due-icon">◷</i><span class="due-label">${dateLabel(task.due_date)}</span></span>
+      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${overdue ? '<span class="overdue-badge">超期</span>' : ""}${statusBadge}${due}
       ${task.tags.map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}
     </div></div><i class="task-color-dot"></i>
   </article>`;
@@ -175,7 +176,7 @@ function editor() {
     <input id="task-title" value="${escapeHtml(task.title)}" placeholder="想完成什么？" autofocus required maxlength="200" />
     <textarea id="task-details" placeholder="补充任务详情（可选）" maxlength="2000">${escapeHtml(task.details || "")}</textarea>
     <div class="composer-row"><span>颜色标签</span><div class="color-options">${COLORS.map((color) => `<button type="button" class="color-picker ${color} ${task.color === color ? "selected" : ""}" data-action="pick-color" data-color="${color}">${task.color === color ? "✓" : ""}</button>`).join("")}</div></div>
-    ${task.completed ? "" : statusEditor(task)}${tagsEditor()}<label class="composer-row"><span>计划完成</span><input id="task-date" type="date" value="${task.due_date || ""}" /></label>
+    ${task.completed ? "" : statusEditor(task)}${tagsEditor()}<div class="composer-row due-date-row"><span>计划完成</span><div class="due-date-control">${task.due_date ? `<input id="task-date" type="date" value="${task.due_date}" /><button type="button" class="clear-date-button" data-action="clear-due-date">清除</button>` : '<input id="task-date" class="empty-date-input" type="date" value="" aria-label="设置计划完成日期" /><span class="set-date-button">设置日期</span>'}</div></div>
     ${task.id ? '<button type="button" class="delete-button" data-action="delete-task">删除事项</button>' : ""}<button class="save-button" type="submit">${task.id ? "保存修改" : "添加事项"}</button>
   </form></div>`;
 }
@@ -232,6 +233,7 @@ app.addEventListener("click", async (event) => {
     if (action === "color-filter") { state.color = button.dataset.color; return render(); }
     if (action === "pick-color") { state.editor.color = button.dataset.color; return render(); }
     if (action === "pick-task-status") { state.editor.status = button.dataset.status; return render(); }
+    if (action === "clear-due-date") { state.editor.due_date = ""; return render(); }
     if (action === "remove-tag") { state.draftTags = state.draftTags.filter((tag) => tag !== button.dataset.tag); return render(); }
     if (action === "switch-identity") { localStorage.removeItem("todo-identity"); state.identity = ""; state.view = "today"; return render(); }
     if (action === "toggle") {
@@ -280,6 +282,12 @@ app.addEventListener("input", (event) => {
   if (event.target.id === "task-details" && state.editor) state.editor.details = event.target.value;
   if (event.target.id === "task-date" && state.editor) state.editor.due_date = event.target.value;
 });
+app.addEventListener("change", (event) => {
+  if (event.target.id === "task-date" && state.editor) {
+    state.editor.due_date = event.target.value;
+    render();
+  }
+});
 
 app.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -296,7 +304,7 @@ app.addEventListener("submit", async (event) => {
     if (event.target.id === "task-form") {
       const title = document.querySelector("#task-title").value;
       const details = document.querySelector("#task-details").value;
-      const dueDate = document.querySelector("#task-date").value || null;
+      const dueDate = document.querySelector("#task-date")?.value || null;
       const tag = state.tagInput.trim().replace(/^#/, "");
       const tags = tag && !state.draftTags.includes(tag) ? [...state.draftTags, tag] : state.draftTags;
       const payload = { title, details, color: state.editor.color, status: state.editor.status || "none", tags, dueDate };
