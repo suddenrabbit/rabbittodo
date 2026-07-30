@@ -1,6 +1,6 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260730.105113";
+const APP_VERSION = "v20260730.105247";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -215,7 +215,7 @@ function render() {
   }
 }
 
-function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: today() }) { state.editor = { ...task, status: task.status || "none" }; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
+function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "" }) { state.editor = { ...task, status: task.status || "none" }; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
 function commitTag() { const tag = state.tagInput.trim().replace(/^#/, ""); if (tag && !state.draftTags.includes(tag)) state.draftTags.push(tag); state.tagInput = ""; render(); document.querySelector("#tag-input")?.focus(); }
 
 app.addEventListener("click", async (event) => {
