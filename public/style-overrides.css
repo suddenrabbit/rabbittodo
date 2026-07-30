@@ -127,44 +127,33 @@
   box-shadow: 0 7px 19px #e5899024, 0 2px 5px #e5899016;
 }
 
-.drag-spacer {
-  width: 23px;
-  flex: 0 0 23px;
-}
-
-.completed-section {
-  margin-top: 23px;
-}
-
-.completed-section-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0 3px 10px;
-  color: #8c8b95;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.completed-section-title b {
-  min-width: 19px;
-  padding: 2px 6px;
-  border-radius: 9px;
-  background: #ecebf2;
-  color: #8e8d98;
-  font-size: 10px;
-  text-align: center;
-}
-
-.completed-task-list {
-  margin-top: 0;
-}
+.task-card { padding-left: 12px; }
 
 .task-card .task-color-dot {
   width: 9px;
   height: 9px;
   box-shadow: 0 0 0 3px #fff;
 }
+
+.task-card .task-color-dot.is-star {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  margin-top: 1px;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 17px;
+  font-style: normal;
+  line-height: 1;
+}
+
+.task-card.color-violet .task-color-dot.is-star { background: transparent; color: #796be2; }
+.task-card.color-mint .task-color-dot.is-star { background: transparent; color: #66cbb3; }
+.task-card.color-orange .task-color-dot.is-star { background: transparent; color: #eeac60; }
+.task-card.color-blue .task-color-dot.is-star { background: transparent; color: #76aad8; }
+.task-card.color-rose .task-color-dot.is-star { background: transparent; color: #df80a8; }
 
 .task-details {
   display: block;
@@ -188,6 +177,8 @@
 .task-meta:has(.task-details) > .due,
 .task-meta:has(.task-details) > .tag,
 .task-meta:has(.task-details) > .overdue-badge,
+.task-meta:has(.task-details) > .due-distance-badge,
+.task-meta:has(.task-details) > .completed-date,
 .task-meta:has(.task-details) > .status-badge {
   margin-right: 6px;
 }
@@ -204,6 +195,36 @@
 
 .status-badge.in_progress { background: #e4edff; color: #5274bf; }
 .status-badge.paused { background: #eeecf3; color: #787582; }
+
+.due-distance-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.15;
+  vertical-align: 1px;
+}
+
+.due-distance-badge.is-overdue { background: #f7d3d4; color: #b94e58; }
+.due-distance-badge.is-today { background: #fff0d8; color: #b87428; }
+.due-distance-badge.is-upcoming { background: #e7efff; color: #5575b9; }
+
+.completed-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #5d9a86;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.completed-date i {
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1;
+}
 
 .task-card {
   min-width: 0;
@@ -249,6 +270,29 @@
 }
 
 .status-option.selected { background: #e9e6ff; color: #5f50ce; font-weight: 700; }
+
+.pin-editor > span {
+  display: grid;
+  gap: 2px;
+}
+
+.pin-editor > span b { font-size: 14px; font-weight: 500; }
+.pin-editor > span small { color: #a09fab; font-size: 9px; }
+
+.pin-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: #f0eff4;
+  color: #85838e;
+  font-size: 11px;
+}
+
+.pin-toggle i { font-size: 15px; font-style: normal; line-height: 1; }
+.pin-toggle.is-active { background: #eeeaff; color: #6253cd; font-weight: 700; }
 
 .due-date-control {
   display: flex;
@@ -335,39 +379,6 @@
   .tag-input-wrap input {
     font-size: 16px;
   }
-}
-
-.drag-handle {
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.drag-handle:active {
-  cursor: grabbing;
-}
-
-.task-card.is-drag-placeholder {
-  visibility: hidden;
-  box-shadow: none;
-}
-
-body.is-task-dragging {
-  cursor: grabbing;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.task-drag-ghost {
-  position: fixed;
-  z-index: 1000;
-  margin: 0;
-  pointer-events: none;
-  will-change: transform;
-  transform-origin: center;
-  box-shadow: 0 19px 36px #3d36604d, 0 4px 12px #3d366030;
-  transition: box-shadow .16s ease;
 }
 
 /* Keep the navigation outside the scrollable task area on desktop and mobile Safari. */

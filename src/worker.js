@@ -12,7 +12,7 @@ function taskFromRow(row) {
   if (!row) return null;
   let tags = [];
   try { tags = JSON.parse(row.tags || "[]"); } catch { tags = []; }
-  return { ...row, completed: Boolean(row.completed), tags, details: row.details || "", status: row.status || "none" };
+  return { ...row, completed: Boolean(row.completed), pinned: Boolean(row.pinned), tags, details: row.details || "", status: row.status || "none" };
 }
 
 function identityFrom(request) {
@@ -35,8 +35,9 @@ function sanitizeTask(input) {
   const details = String(input.details || "").trim().slice(0, 2_000);
   const status = STATUSES.has(input.status) ? input.status : "none";
   const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.dueDate || "")) ? input.dueDate : null;
+  const pinned = Boolean(input.pinned);
   if (!title) throw new Error("请填写事项名称");
-  return { title, color, tags, details, status, dueDate };
+  return { title, color, tags, details, status, dueDate, pinned };
 }
 
 function taskIdFrom(pathname) {
@@ -69,23 +70,22 @@ async function api(request, env, url) {
 
   if (request.method === "GET" && pathname === "/api/tasks") {
     const { results } = await env.DB.prepare(
-      "SELECT * FROM tasks WHERE identity_code = ? ORDER BY position ASC, id DESC",
+      "SELECT * FROM tasks WHERE identity_code = ? ORDER BY id DESC",
     ).bind(identity).all();
     return json({ tasks: results.map(taskFromRow) });
   }
 
   if (request.method === "POST" && pathname === "/api/tasks") {
     const task = sanitizeTask(await bodyFrom(request));
-    const first = await env.DB.prepare(
-      "SELECT COALESCE(MIN(position), 0) AS value FROM tasks WHERE identity_code = ?",
-    ).bind(identity).first();
     const inserted = await env.DB.prepare(
-      "INSERT INTO tasks (identity_code, title, color, tags, details, status, due_date, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    ).bind(identity, task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, Number(first?.value || 0) - 1).run();
+      "INSERT INTO tasks (identity_code, title, color, tags, details, status, due_date, pinned, pinned_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END)",
+    ).bind(identity, task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, task.pinned ? 1 : 0, task.pinned ? 1 : 0).run();
     const created = await taskById(env.DB, Number(inserted.meta.last_row_id), identity);
     return json({ task: created }, 201);
   }
 
+  // Keep the endpoint temporarily for clients that have not refreshed yet.
+  // The current interface no longer exposes manual ordering and ignores position.
   if (request.method === "POST" && pathname === "/api/tasks/reorder") {
     const { ids } = await bodyFrom(request);
     if (!Array.isArray(ids)) return json({ error: "排序数据无效" }, 400);
@@ -107,8 +107,8 @@ async function api(request, env, url) {
   if (id && request.method === "PUT") {
     const task = sanitizeTask(await bodyFrom(request));
     const result = await env.DB.prepare(
-      "UPDATE tasks SET title = ?, color = ?, tags = ?, details = ?, status = ?, due_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?",
-    ).bind(task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, id, identity).run();
+      "UPDATE tasks SET title = ?, color = ?, tags = ?, details = ?, status = ?, due_date = ?, pinned = ?, pinned_at = CASE WHEN ? = 0 THEN NULL WHEN pinned_at IS NULL THEN CURRENT_TIMESTAMP ELSE pinned_at END, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?",
+    ).bind(task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, task.pinned ? 1 : 0, task.pinned ? 1 : 0, id, identity).run();
     if (!result.meta.changes) return json({ error: "事项不存在" }, 404);
     return json({ task: await taskById(env.DB, id, identity) });
   }

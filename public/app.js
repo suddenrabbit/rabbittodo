@@ -1,6 +1,6 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260730.211436";
+const APP_VERSION = "v20260730.220032";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -28,8 +28,6 @@ const preventPageZoom = (event) => {
 document.addEventListener("gesturestart", preventPageZoom, { passive: false });
 document.addEventListener("gesturechange", preventPageZoom, { passive: false });
 document.addEventListener("touchmove", preventPageZoom, { passive: false });
-let pointerDrag = null;
-let suppressCardClickUntil = 0;
 let taskSyncPromise = null;
 let lastTaskSyncAt = 0;
 let mutationChain = Promise.resolve();
@@ -39,7 +37,7 @@ const taskIdAliases = new Map();
 
 const state = {
   identity: localStorage.getItem("todo-identity") || "", identityDraft: sessionStorage.getItem("todo-identity-draft") || "",
-  tasks: [], view: "today", tag: "全部", color: "全部", status: "all", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "", dragId: null,
+  tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
 };
 
 updateViewportClasses();
@@ -71,9 +69,27 @@ function dateInShanghai(value = new Date()) {
 }
 const today = () => dateInShanghai();
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
-const dateLabel = (date) => date === today() ? "今天" : date ? date.slice(5).replace("-", "月") + "日" : "未安排";
+const dateLabel = (date) => {
+  if (!date) return "未安排";
+  if (date === today()) return "今天";
+  const [year, month, day] = date.split("-");
+  return year === today().slice(0, 4) ? `${month}月${day}日` : `${year}年${month}月${day}日`;
+};
 const isOverdue = (task) => !task.completed && task.due_date && task.due_date < today();
-const oldCompleted = (task) => task.completed && task.completed_at && dateInShanghai(task.completed_at) !== today();
+
+function dueDistanceBadge(task) {
+  if (task.completed || !task.due_date) return "";
+  const millisecondsPerDay = 24 * 60 * 60 * 1_000;
+  const distance = Math.round((Date.parse(`${task.due_date}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / millisecondsPerDay);
+  if (distance < 0) return `<span class="due-distance-badge is-overdue">超期 ${Math.abs(distance)} 天</span>`;
+  if (distance === 0) return '<span class="due-distance-badge is-today">今天到期</span>';
+  return `<span class="due-distance-badge is-upcoming">还剩 ${distance} 天</span>`;
+}
+
+function completedDate(task) {
+  if (!task.completed || !task.completed_at) return "";
+  return `<span class="completed-date"><i>✓</i>${dateLabel(dateInShanghai(task.completed_at))}完成</span>`;
+}
 
 function addDays(date, amount) {
   const value = new Date(`${date}T00:00:00Z`);
@@ -162,51 +178,58 @@ async function loadTasks({ quiet = false } = {}) {
 }
 
 function refreshActiveTasks(force = false) {
-  if (!state.identity || state.editor || pointerDrag || pendingMutations || document.visibilityState === "hidden") return;
+  if (!state.identity || state.editor || pendingMutations || document.visibilityState === "hidden") return;
   // pageshow、focus 与 visibilitychange 往往会连续触发；前台恢复只保留一次读取。
   const interval = force ? 1_500 : 30_000;
   if (Date.now() - lastTaskSyncAt > interval) loadTasks({ quiet: true });
 }
 
 function filteredTasks() {
-  let tasks = state.tasks;
-  if (state.view === "today") tasks = tasks.filter((task) => !oldCompleted(task) && (!task.due_date || task.due_date <= today() || task.completed));
-  if (state.status === "open") tasks = tasks.filter((task) => !task.completed);
-  if (state.status === "done") tasks = tasks.filter((task) => task.completed);
-  return tasks.filter((task) => (state.tag === "全部" || task.tags.includes(state.tag)) && (state.color === "全部" || task.color === state.color));
+  const tasks = state.tasks.filter((task) => state.view === "done" ? task.completed : !task.completed);
+  return tasks
+    .filter((task) => (state.tag === "全部" || task.tags.includes(state.tag)) && (state.color === "全部" || task.color === state.color))
+    .sort(compareTasks);
 }
 
-function taskCard(task, { sortable = !task.completed } = {}) {
+function compareTasks(left, right) {
+  if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
+  if (left.pinned && right.pinned) {
+    const pinnedOrder = String(right.pinned_at || "").localeCompare(String(left.pinned_at || ""));
+    if (pinnedOrder) return pinnedOrder;
+  }
+  if (Boolean(left.due_date) !== Boolean(right.due_date)) return left.due_date ? -1 : 1;
+  if (left.due_date && right.due_date) {
+    const dateOrder = left.due_date.localeCompare(right.due_date);
+    if (dateOrder) return dateOrder;
+  }
+  const statusRank = { in_progress: 0, none: 1, paused: 2 };
+  const statusOrder = (statusRank[left.status || "none"] ?? 1) - (statusRank[right.status || "none"] ?? 1);
+  if (statusOrder) return statusOrder;
+  return Number(right.id) - Number(left.id);
+}
+
+function taskCard(task) {
   const overdue = isOverdue(task);
   const status = task.status || "none";
   const statusBadge = !task.completed && status !== "none"
     ? `<span class="status-badge ${status}">${status === "in_progress" ? "进行中" : "暂停"}</span>`
     : "";
+  const distanceBadge = dueDistanceBadge(task);
+  const completionDate = completedDate(task);
   const due = task.due_date ? `<span class="due"><i class="due-icon">◷</i><span class="due-label">${dateLabel(task.due_date)}</span></span>` : "";
-  return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : ""} ${overdue ? "is-overdue" : ""}" data-task-id="${task.id}">
-    ${sortable ? `<button class="drag-handle" data-action="drag" data-id="${task.id}" aria-label="拖动排序">⠿</button>` : '<span class="drag-spacer" aria-hidden="true"></span>'}
+  return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : ""} ${overdue ? "is-overdue" : ""} ${task.pinned ? "is-pinned" : ""}" data-task-id="${task.id}">
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
     <div class="task-body"><h3>${escapeHtml(task.title)}</h3><div class="task-meta">
-      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${overdue ? '<span class="overdue-badge">超期</span>' : ""}${statusBadge}${due}
+      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${completionDate}${distanceBadge}${statusBadge}${due}
       ${task.tags.map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}
-    </div></div><i class="task-color-dot"></i>
+    </div></div><i class="task-color-dot ${task.pinned ? "is-star" : ""}" ${task.pinned ? 'aria-label="已置顶"' : ""}>${task.pinned ? "★" : ""}</i>
   </article>`;
-}
-
-function progress({ title = "今日事项", tasks = state.tasks.filter((task) => !oldCompleted(task) && (!task.due_date || task.due_date <= today() || task.completed)), showTotal = true } = {}) {
-  const done = tasks.filter((task) => task.completed).length;
-  const percent = tasks.length ? Math.round(done / tasks.length * 100) : 0;
-  const allDone = state.tasks.filter((task) => task.completed).length;
-  return `<section class="progress-card"><div class="progress-copy"><span>${title}</span><strong>${done}<small> / ${tasks.length}</small></strong><p>已完成</p></div>
-    <div class="progress-ring" style="--progress:${percent}%"><div><b>${percent}</b><span>%</span></div></div>${showTotal ? `<div class="total-count">总事项 <b>${allDone}</b> / ${state.tasks.length}</div>` : ""}</section>`;
 }
 
 function filters() {
   const tags = ["全部", ...[...new Set(state.tasks.flatMap((task) => task.tags))].sort((a, b) => a.localeCompare(b, "zh-CN"))];
-  const statusLabel = { all: "全部", open: "未完成", done: "已完成" }[state.status];
-  const summary = [statusLabel, state.tag, state.color === "全部" ? "" : COLOR_NAMES[state.color]].filter((item) => item && item !== "全部").join(" · ") || "全部事项";
-  return `<section class="filter-panel ${state.filtersOpen ? "is-open" : ""}"><button class="filter-toggle" data-action="toggle-filters" aria-expanded="${state.filtersOpen}"><span class="filter-toggle-title">筛选</span><span class="filter-toggle-summary">${summary}</span><i>⌄</i></button>${state.filtersOpen ? `<div class="filter-panel-content"><div class="filter-group"><p>完成状态</p><div class="filters">${[["all", "全部"], ["open", "未完成"], ["done", "已完成"]].map(([value, label]) => `<button data-action="status-filter" data-status="${value}" class="${state.status === value ? "filter-active" : ""}">${label}</button>`).join("")}</div></div>
-  <div class="filter-group"><p>按标签</p><div class="filters">${tags.map((tag) => `<button data-action="tag-filter" data-tag="${escapeHtml(tag)}" class="${state.tag === tag ? "filter-active" : ""}">${escapeHtml(tag)}</button>`).join("")}</div></div>
+  const summary = [state.tag, state.color === "全部" ? "" : COLOR_NAMES[state.color]].filter((item) => item && item !== "全部").join(" · ") || `全部${state.view === "done" ? "已办" : "待办"}`;
+  return `<section class="filter-panel ${state.filtersOpen ? "is-open" : ""}"><button class="filter-toggle" data-action="toggle-filters" aria-expanded="${state.filtersOpen}"><span class="filter-toggle-title">筛选</span><span class="filter-toggle-summary">${summary}</span><i>⌄</i></button>${state.filtersOpen ? `<div class="filter-panel-content"><div class="filter-group"><p>按标签</p><div class="filters">${tags.map((tag) => `<button data-action="tag-filter" data-tag="${escapeHtml(tag)}" class="${state.tag === tag ? "filter-active" : ""}">${escapeHtml(tag)}</button>`).join("")}</div></div>
   <div class="filter-group"><p>按颜色</p><div class="color-filters"><button data-action="color-filter" data-color="全部" class="${state.color === "全部" ? "filter-active" : ""}">全部</button>${COLORS.map((color) => `<button data-action="color-filter" data-color="${color}" class="color-filter ${color} ${state.color === color ? "filter-active" : ""}"><i></i>${COLOR_NAMES[color]}</button>`).join("")}</div></div>
   <p class="filter-result">找到 ${filteredTasks().length} 项符合条件的事项</p></div>` : ""}</section>`;
 }
@@ -225,6 +248,10 @@ function statusEditor(task) {
   return `<div class="composer-row status-editor"><span>任务状态</span><div class="status-options">${options.map(([value, label]) => `<button type="button" class="status-option status-${value} ${status === value ? "selected" : ""}" data-action="pick-task-status" data-status="${value}">${label}</button>`).join("")}</div></div>`;
 }
 
+function pinEditor(task) {
+  return `<div class="composer-row pin-editor"><span><b>置顶任务</b><small>后置顶的任务排在更前面</small></span><button type="button" class="pin-toggle ${task.pinned ? "is-active" : ""}" data-action="toggle-pin" aria-pressed="${Boolean(task.pinned)}"><i>${task.pinned ? "★" : "☆"}</i>${task.pinned ? "已置顶" : "置顶"}</button></div>`;
+}
+
 function editor() {
   if (!state.editor) return "";
   const task = state.editor;
@@ -235,7 +262,7 @@ function editor() {
     <input id="task-title" value="${escapeHtml(task.title)}" placeholder="想完成什么？" autofocus required maxlength="200" />
     <textarea id="task-details" placeholder="补充任务详情（可选）" maxlength="2000">${escapeHtml(task.details || "")}</textarea>
     <div class="composer-row"><span>颜色标签</span><div class="color-options">${COLORS.map((color) => `<button type="button" class="color-picker ${color} ${task.color === color ? "selected" : ""}" data-action="pick-color" data-color="${color}">${task.color === color ? "✓" : ""}</button>`).join("")}</div></div>
-    ${task.completed ? "" : statusEditor(task)}${tagsEditor()}<div class="composer-row due-date-row"><span>计划完成</span><div class="due-date-control">${dueDateControl}</div></div>
+    ${task.completed ? "" : statusEditor(task)}${pinEditor(task)}${tagsEditor()}<div class="composer-row due-date-row"><span>计划完成</span><div class="due-date-control">${dueDateControl}</div></div>
     ${task.id ? '<button type="button" class="delete-button" data-action="delete-task">删除事项</button>' : ""}<button class="save-button" type="submit">${task.id ? "保存修改" : "添加事项"}</button>
   </form></div>`;
 }
@@ -256,18 +283,15 @@ function profilePage() {
 function render() {
   const retainedAvatar = app.querySelector(".avatar");
   const tasks = filteredTasks();
-  const openTasks = tasks.filter((task) => !task.completed);
-  const completedTasks = tasks.filter((task) => task.completed).sort((left, right) => String(right.completed_at || "").localeCompare(String(left.completed_at || "")));
-  const emptyMessage = completedTasks.length && state.status === "all" ? "所有事项均已完成，做得好。" : "这里还没有事项，点击 + 添加第一项吧。";
-  const openList = openTasks.length || !completedTasks.length || state.status === "all" ? `<section class="task-list">${openTasks.map((task) => taskCard(task)).join("") || `<p class="empty-state">${emptyMessage}</p>`}</section>` : "";
-  const taskContent = `${openList}${completedTasks.length ? `<section class="completed-section"><div class="completed-section-title"><span>已完成</span><b>${completedTasks.length}</b></div><section class="task-list completed-task-list">${completedTasks.map((task) => taskCard(task, { sortable: false })).join("")}</section></section>` : ""}${state.view === "today" && state.tasks.some(oldCompleted) ? '<p class="archive-note">较早完成的事项已自动隐藏</p>' : ""}`;
-  const heading = { today: "今天", all: "全部事项", profile: "我的" }[state.view];
-  const overviewContent = `${pageHeader(heading)}${state.view === "today" ? progress() : ""}${state.view === "all" ? progress({ title: "全部事项", tasks: state.tasks, showTotal: false }) : ""}${filters()}`;
+  const emptyMessage = state.view === "done" ? "还没有已完成的事项。" : "这里还没有待办事项，点击 + 添加第一项吧。";
+  const taskContent = `<section class="task-list">${tasks.map((task) => taskCard(task)).join("") || `<p class="empty-state">${emptyMessage}</p>`}</section>`;
+  const heading = { todo: "待办", done: "已办", profile: "我的" }[state.view];
+  const overviewContent = `${pageHeader(heading)}${filters()}`;
   const pageContent = state.view === "profile"
     ? profilePage()
     : `<section class="workspace workspace-${state.view}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}</main></section>`;
   app.innerHTML = `<section class="phone"><div class="content-scroll">${pageContent}</div>
-    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="today" class="${state.view === "today" ? "active" : ""}"><span>◷</span>今日</button><button data-action="view" data-view="all" class="${state.view === "all" ? "active" : ""}"><span>☷</span>全部</button></nav></section>${editor()}${datePicker()}${identityGate()}`;
+    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (retainedAvatar && nextAvatar) {
     retainedAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
@@ -275,7 +299,7 @@ function render() {
   }
 }
 
-function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "" }) { state.editor = { ...task, status: task.status || "none" }; state.datePicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
+function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "", pinned: false, pinned_at: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned) }; state.datePicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
 function commitTag() { const tag = state.tagInput.trim().replace(/^#/, ""); if (tag && !state.draftTags.includes(tag)) state.draftTags.push(tag); state.tagInput = ""; render(); document.querySelector("#tag-input")?.focus(); }
 
 app.addEventListener("click", async (event) => {
@@ -293,11 +317,11 @@ app.addEventListener("click", async (event) => {
     if (action === "view") { state.view = button.dataset.view; return render(); }
     if (action === "profile") { state.view = "profile"; return render(); }
     if (action === "toggle-filters") { state.filtersOpen = !state.filtersOpen; return render(); }
-    if (action === "status-filter") { state.status = button.dataset.status; return render(); }
     if (action === "tag-filter") { state.tag = button.dataset.tag; return render(); }
     if (action === "color-filter") { state.color = button.dataset.color; return render(); }
     if (action === "pick-color") { state.editor.color = button.dataset.color; return render(); }
     if (action === "pick-task-status") { state.editor.status = button.dataset.status; return render(); }
+    if (action === "toggle-pin") { state.editor.pinned = !state.editor.pinned; return render(); }
     if (action === "open-date-picker") { state.datePicker = { month: (state.editor.due_date || today()).slice(0, 7) }; return render(); }
     if (action === "close-date-picker") { state.datePicker = null; return render(); }
     if (action === "previous-calendar-month") { state.datePicker.month = shiftMonth(state.datePicker.month, -1); return render(); }
@@ -305,7 +329,7 @@ app.addEventListener("click", async (event) => {
     if (action === "pick-date") { state.editor.due_date = button.dataset.date; state.datePicker = null; return render(); }
     if (action === "clear-picker-date" || action === "clear-due-date") { state.editor.due_date = ""; state.datePicker = null; return render(); }
     if (action === "remove-tag") { state.draftTags = state.draftTags.filter((tag) => tag !== button.dataset.tag); return render(); }
-    if (action === "switch-identity") { localStorage.removeItem("todo-identity"); state.identity = ""; state.view = "today"; return render(); }
+    if (action === "switch-identity") { localStorage.removeItem("todo-identity"); state.identity = ""; state.view = "todo"; return render(); }
     if (action === "toggle") {
       const id = Number(button.dataset.id);
       const task = state.tasks.find((item) => item.id === id);
@@ -333,7 +357,6 @@ app.addEventListener("click", async (event) => {
     return;
   }
   const card = event.target.closest("[data-task-id]");
-  if (Date.now() < suppressCardClickUntil) return;
   if (card) openEditor(state.tasks.find((task) => task.id === Number(card.dataset.taskId)));
 });
 
@@ -371,11 +394,14 @@ app.addEventListener("submit", async (event) => {
       const dueDate = state.editor.due_date || null;
       const tag = state.tagInput.trim().replace(/^#/, "");
       const tags = tag && !state.draftTags.includes(tag) ? [...state.draftTags, tag] : state.draftTags;
-      const payload = { title, details, color: state.editor.color, status: state.editor.status || "none", tags, dueDate };
+      const payload = { title, details, color: state.editor.color, status: state.editor.status || "none", tags, dueDate, pinned: Boolean(state.editor.pinned) };
       const editingId = Number(state.editor.id || 0);
       if (editingId) {
         const localTask = state.tasks.find((task) => task.id === editingId);
-        if (localTask) Object.assign(localTask, { title, details, color: payload.color, status: payload.status, tags, due_date: dueDate });
+        if (localTask) {
+          const pinnedAt = payload.pinned ? (localTask.pinned ? localTask.pinned_at : new Date().toISOString()) : null;
+          Object.assign(localTask, { title, details, color: payload.color, status: payload.status, tags, due_date: dueDate, pinned: payload.pinned, pinned_at: pinnedAt });
+        }
         state.editor = null;
         render();
         saveInBackground(async () => {
@@ -384,13 +410,14 @@ app.addEventListener("submit", async (event) => {
         });
       } else {
         const temporaryId = nextTemporaryTaskId--;
-        const position = state.tasks.reduce((min, task) => Math.min(min, Number(task.position) || 0), 0) - 1;
+        const pinnedAt = payload.pinned ? new Date().toISOString() : null;
         state.tasks.unshift({
           id: temporaryId, identity_code: state.identity, title, details, color: payload.color, tags,
-          due_date: dueDate, completed: false, completed_at: null, status: payload.status, position,
+          due_date: dueDate, completed: false, completed_at: null, status: payload.status, pinned: payload.pinned, pinned_at: pinnedAt,
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });
         state.editor = null;
+        state.view = "todo";
         render();
         saveInBackground(async () => {
           const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(payload) });
@@ -401,110 +428,6 @@ app.addEventListener("submit", async (event) => {
     }
   } catch (error) { alert(error.message); }
 });
-
-app.addEventListener("pointerdown", (event) => {
-  const handle = event.target.closest(".drag-handle");
-  if (!handle || event.button !== 0) return;
-  const card = handle.closest("[data-task-id]");
-  const list = card?.closest(".task-list");
-  if (!card || !list) return;
-  event.preventDefault();
-  const bounds = card.getBoundingClientRect();
-  pointerDrag = {
-    id: Number(card.dataset.taskId), card, list, handle, pointerId: event.pointerId,
-    startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY,
-    bounds, offsetY: event.clientY - bounds.top, didMove: false, ghost: null,
-  };
-  state.dragId = pointerDrag.id;
-  handle.setPointerCapture?.(event.pointerId);
-});
-
-function startFloatingDrag(drag) {
-  drag.didMove = true;
-  drag.card.classList.add("is-drag-placeholder");
-  const ghost = drag.card.cloneNode(true);
-  ghost.classList.remove("is-drag-placeholder");
-  ghost.classList.add("task-drag-ghost");
-  ghost.style.left = `${drag.bounds.left}px`;
-  ghost.style.top = `${drag.bounds.top}px`;
-  ghost.style.width = `${drag.bounds.width}px`;
-  ghost.style.height = `${drag.bounds.height}px`;
-  document.body.append(ghost);
-  drag.ghost = ghost;
-  document.body.classList.add("is-task-dragging");
-}
-
-function moveFloatingCard(drag, event) {
-  const y = event.clientY - drag.offsetY - drag.bounds.top;
-  const x = (event.clientX - drag.startX) * 0.08;
-  drag.ghost.style.transform = `translate3d(${x}px, ${y}px, 0) scale(1.015)`;
-}
-
-function animateTaskReorder(list, card, move) {
-  const before = new Map([...list.querySelectorAll("[data-task-id]")].filter((item) => item !== card).map((item) => [item, item.getBoundingClientRect()]));
-  move();
-  for (const [item, first] of before) {
-    const last = item.getBoundingClientRect();
-    const delta = first.top - last.top;
-    if (Math.abs(delta) > 1) item.animate([{ transform: `translateY(${delta}px)` }, { transform: "translateY(0)" }], { duration: 190, easing: "cubic-bezier(.2,.75,.25,1)" });
-  }
-}
-
-function reorderAtPointer(drag, clientY) {
-  const cards = [...drag.list.querySelectorAll("[data-task-id]")];
-  const others = cards.filter((item) => item !== drag.card);
-  const next = others.find((item) => clientY < item.getBoundingClientRect().top + item.getBoundingClientRect().height / 2);
-  if (next === drag.card.nextElementSibling || (!next && drag.card === cards[cards.length - 1])) return;
-  animateTaskReorder(drag.list, drag.card, () => {
-    if (next) drag.list.insertBefore(drag.card, next);
-    else {
-      const lastOther = others[others.length - 1];
-      drag.list.insertBefore(drag.card, lastOther?.nextElementSibling || null);
-    }
-  });
-}
-
-app.addEventListener("pointermove", (event) => {
-  if (!pointerDrag || event.pointerId !== pointerDrag.pointerId) return;
-  const movedEnough = Math.abs(event.clientX - pointerDrag.startX) > 4 || Math.abs(event.clientY - pointerDrag.startY) > 4;
-  if (!movedEnough) return;
-  event.preventDefault();
-  if (!pointerDrag.didMove) startFloatingDrag(pointerDrag);
-  pointerDrag.lastX = event.clientX;
-  pointerDrag.lastY = event.clientY;
-  moveFloatingCard(pointerDrag, event);
-  reorderAtPointer(pointerDrag, event.clientY);
-});
-
-function finishPointerDrag(event) {
-  if (!pointerDrag || (event && event.pointerId !== pointerDrag.pointerId)) return;
-  const drag = pointerDrag;
-  pointerDrag = null;
-  state.dragId = null;
-  drag.card.classList.remove("is-drag-placeholder");
-  drag.ghost?.remove();
-  document.body.classList.remove("is-task-dragging");
-  drag.handle.releasePointerCapture?.(drag.pointerId);
-  if (event?.type === "pointercancel") {
-    if (drag.didMove) render();
-    return;
-  }
-  if (!drag.didMove) return;
-  suppressCardClickUntil = Date.now() + 260;
-  const visibleIds = [...drag.list.querySelectorAll("[data-task-id]")].map((card) => Number(card.dataset.taskId));
-  const visibleSet = new Set(visibleIds);
-  let visibleIndex = 0;
-  const ids = state.tasks.map((task) => visibleSet.has(task.id) ? visibleIds[visibleIndex++] : task.id);
-  const tasksById = new Map(state.tasks.map((task) => [task.id, task]));
-  state.tasks = ids.map((id) => tasksById.get(id)).filter(Boolean);
-  saveInBackground(() => api("/api/tasks/reorder", {
-    method: "POST",
-    body: JSON.stringify({ ids: state.tasks.map((task) => resolvedTaskId(task.id)) }),
-  }));
-}
-
-app.addEventListener("pointerup", finishPointerDrag);
-app.addEventListener("pointercancel", finishPointerDrag);
 
 // Installed PWAs are often resumed from a frozen page instead of reloaded.
 // Refresh on every foreground return and poll gently while the app stays open.
