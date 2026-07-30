@@ -523,6 +523,20 @@ body.is-task-dragging {
   padding: 4px 0 1px;
 }
 
+.filter-panel .filters,
+.filter-panel .color-filters {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.filter-panel .filters button,
+.filter-panel .color-filters button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workspace,
 .workspace-overview,
 .workspace-tasks {

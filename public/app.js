@@ -1,17 +1,22 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260730.182642";
+const APP_VERSION = "v20260730.211436";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 document.documentElement.classList.toggle("is-ipad", isIPad);
 document.documentElement.classList.toggle("is-touch-device", navigator.maxTouchPoints > 0 || matchMedia("(pointer: coarse)").matches);
-const updateViewportClasses = () => document.documentElement.classList.toggle(
-  "is-compact-landscape",
-  matchMedia("(orientation: landscape) and (max-height: 600px)").matches,
-);
-updateViewportClasses();
-window.addEventListener("resize", updateViewportClasses);
+const isLandscapeViewport = () => window.innerWidth > window.innerHeight;
+let wasLandscapeViewport = isLandscapeViewport();
+const updateViewportClasses = () => {
+  const isLandscape = isLandscapeViewport();
+  document.documentElement.classList.toggle("is-compact-landscape", isLandscape);
+  if (isLandscape && !wasLandscapeViewport) {
+    state.filtersOpen = true;
+    render();
+  }
+  wasLandscapeViewport = isLandscape;
+};
 let isReloadingForServiceWorker = false;
 let serviceWorkerRegistration = null;
 let serviceWorkerUpdatePromise = null;
@@ -34,8 +39,11 @@ const taskIdAliases = new Map();
 
 const state = {
   identity: localStorage.getItem("todo-identity") || "", identityDraft: sessionStorage.getItem("todo-identity-draft") || "",
-  tasks: [], view: "today", tag: "全部", color: "全部", status: "all", filtersOpen: false, editor: null, datePicker: null, draftTags: [], tagInput: "", dragId: null,
+  tasks: [], view: "today", tag: "全部", color: "全部", status: "all", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "", dragId: null,
 };
+
+updateViewportClasses();
+window.addEventListener("resize", updateViewportClasses);
 
 function checkForServiceWorkerUpdate() {
   if (!serviceWorkerRegistration || document.visibilityState === "hidden" || !navigator.onLine) return;
