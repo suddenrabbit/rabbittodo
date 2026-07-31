@@ -385,21 +385,23 @@
   cursor: grab;
   font-size: 18px;
   line-height: 1;
+  outline: none;
   touch-action: none;
   transform: none;
+  -webkit-tap-highlight-color: transparent;
   -webkit-user-select: none;
   user-select: none;
 }
 
 .drag-handle:active {
   cursor: grabbing;
-  background: #efedf7;
   color: #6a5bd3;
 }
 
 .task-card.is-drag-placeholder {
-  opacity: .14;
+  opacity: 0;
   box-shadow: none;
+  pointer-events: none;
 }
 
 .task-drag-ghost {
