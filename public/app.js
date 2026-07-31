@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260731.140932";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v31";
+const APP_VERSION = "v20260731.200410";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v32";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -49,7 +49,7 @@ const savedIdentity = localStorage.getItem("todo-identity") || "";
 
 const state = {
   identity: savedIdentity, identityDraft: sessionStorage.getItem("todo-identity-draft") || "",
-  identityStatus: "", identityPromptOpen: !savedIdentity, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
+  identityStatus: "", identityPromptOpen: !savedIdentity, identitySubmitting: false, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
 };
 
 updateViewportClasses();
@@ -194,6 +194,7 @@ function showIdentityStatus(code, status, { blockCurrent = false } = {}) {
   }
   state.identityDraft = code;
   state.identityStatus = status;
+  state.identitySubmitting = false;
   state.identityPromptOpen = true;
   state.editor = null;
   state.datePicker = null;
@@ -205,6 +206,7 @@ function resetIdentityCandidate() {
   sessionStorage.removeItem("todo-identity-draft");
   state.identityDraft = "";
   state.identityStatus = "";
+  state.identitySubmitting = false;
   render();
 }
 
@@ -213,6 +215,7 @@ function closeIdentityPrompt() {
   sessionStorage.removeItem("todo-identity-draft");
   state.identityDraft = "";
   state.identityStatus = "";
+  state.identitySubmitting = false;
   state.identityPromptOpen = false;
   render();
   reloadForServiceWorkerUpdate();
@@ -222,6 +225,7 @@ function openIdentityPrompt() {
   sessionStorage.removeItem("todo-identity-draft");
   state.identityDraft = "";
   state.identityStatus = "";
+  state.identitySubmitting = false;
   state.identityPromptOpen = true;
   render();
 }
@@ -460,12 +464,13 @@ function editor() {
 
 function identityGate() {
   if (!state.identityPromptOpen) return "";
-  const closeButton = state.identity ? '<button class="identity-close-button" type="button" data-action="close-identity" aria-label="关闭身份码窗口">×</button>' : "";
+  const submitting = state.identitySubmitting;
+  const closeButton = state.identity ? `<button class="identity-close-button" type="button" data-action="close-identity" aria-label="关闭身份码窗口" ${submitting ? "disabled" : ""}>×</button>` : "";
   if (state.identityStatus) {
     const pending = state.identityStatus === "pending";
     return `<div class="identity-gate"><section class="identity-card identity-status-card">${closeButton}<div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>${pending ? "请等待管理员审核确认" : "该身份码暂不可用"}</h2><strong class="identity-code-preview">${escapeHtml(state.identityDraft)}</strong><span>${pending ? "审核通过后即可使用。你可以稍后重新检查状态。" : "该身份码已禁用或审核未通过，请联系管理员。"}</span><button class="save-button" type="button" data-action="recheck-identity">重新检查状态</button><button class="identity-secondary-button" type="button" data-action="reset-identity">更换身份码</button></section></div>`;
   }
-  return `<div class="identity-gate"><form class="identity-card" id="identity-form">${closeButton}<div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>今天，慢一点也没关系</h2><span>输入 6 位身份码，在本设备隔离你的待办数据。</span><input id="identity-code" value="${escapeHtml(state.identityDraft)}" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 位身份码" required /><button class="save-button" type="submit">开始记录</button></form></div>`;
+  return `<div class="identity-gate"><form class="identity-card ${submitting ? "is-submitting" : ""}" id="identity-form">${closeButton}<div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>今天，慢一点也没关系</h2><span>输入 6 位身份码，在本设备隔离你的待办数据。</span><input id="identity-code" value="${escapeHtml(state.identityDraft)}" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 位身份码" required ${submitting ? "disabled" : ""} /><button class="save-button identity-submit-button" type="submit" aria-busy="${submitting}" ${submitting ? "disabled" : ""}>${submitting ? '<i class="identity-submit-spinner"></i><span>正在进入</span>' : "开始记录"}</button></form></div>`;
 }
 
 function pageHeader(heading) {
@@ -793,8 +798,20 @@ app.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
     if (event.target.id === "identity-form") {
+      if (state.identitySubmitting) return;
       const code = document.querySelector("#identity-code").value;
-      await verifyIdentity(code);
+      state.identityDraft = code;
+      state.identitySubmitting = true;
+      render();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      try {
+        await verifyIdentity(code);
+      } finally {
+        if (state.identitySubmitting) {
+          state.identitySubmitting = false;
+          if (state.identityPromptOpen) render();
+        }
+      }
       return;
     }
     if (event.target.id === "task-form") {

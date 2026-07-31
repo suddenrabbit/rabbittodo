@@ -666,6 +666,44 @@ body.is-task-dragging {
 
 .identity-card { position: relative; }
 
+.identity-card input:disabled {
+  opacity: 1;
+  background: #f5f4f8;
+  color: #777580;
+  -webkit-text-fill-color: #777580;
+}
+
+.identity-submit-button {
+  min-height: 47px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.identity-submit-button:disabled {
+  opacity: 1;
+  cursor: wait;
+}
+
+.identity-submit-spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border: 2px solid #ffffff5c;
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: identity-submit-spin .72s linear infinite;
+}
+
+@keyframes identity-submit-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .identity-submit-spinner { animation-duration: 1.4s; }
+}
+
 .identity-close-button {
   position: absolute;
   top: 14px;
