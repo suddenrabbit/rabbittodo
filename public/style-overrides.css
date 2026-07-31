@@ -1,4 +1,17 @@
 /* Production visual refinements: use layout centering instead of font baselines. */
+.auth-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 14px; }
+.auth-links button { background: transparent; color: #6253cd; font-size: 12px; padding: 4px; }
+.identity-card > input { width: 100%; margin-top: 11px; border: 1px solid #e5e3eb; border-radius: 14px; background: #fff; padding: 13px; text-align: left; font-size: 14px; letter-spacing: 0; outline-color: #6758d7; }
+.identity-card > span + input { margin-top: 24px; }
+#auth-identity { text-align: center; letter-spacing: 5px; }
+.identity-card .auth-error { margin: 12px 0 -6px; border-radius: 10px; background: #fff0f1; color: #b54752; padding: 9px 11px; text-align: left; font-size: 12px; line-height: 1.45; }
+.username-display { font-size: 23px !important; letter-spacing: .5px !important; overflow-wrap: anywhere; }
+.profile-card > span { display: block; max-width: 290px; margin: 0 auto; }
+.account-form { display: grid; gap: 8px; margin-top: 18px; text-align: left; }
+.account-form input { width: 100%; border: 1px solid #e5e3eb; border-radius: 11px; padding: 11px; outline-color: #6758d7; }
+.account-form .save-button { margin-top: 2px; }
+.profile-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
+.profile-card .profile-actions button { width: 100%; margin-top: 0; }
 .check-button {
   display: grid;
   place-items: center;
@@ -55,6 +68,19 @@
 .tabbar button {
   gap: 5px;
   font-size: 11px;
+  -webkit-appearance: none;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tabbar button:active {
+  background: transparent;
+}
+
+.tabbar button:focus-visible {
+  border-radius: 10px;
+  outline: 2px solid #c8c2f4;
+  outline-offset: 2px;
 }
 
 .tabbar button span {
@@ -852,16 +878,55 @@ body.is-task-dragging {
   text-align: center;
 }
 
+@media (display-mode: standalone) {
+  html,
+  body,
+  .app-shell,
+  .phone {
+    background: #f8f8fa;
+  }
+}
+
 @media (max-width: 520px) {
+  html,
+  body,
+  .app-shell,
+  .phone {
+    background: #f8f8fa;
+  }
+
+  .app-shell {
+    height: 100svh;
+    height: 100dvh;
+    min-height: 100svh;
+    min-height: 100dvh;
+    padding: 0;
+  }
+
   .phone {
     height: 100svh;
+    height: 100dvh;
     min-height: 100svh;
+    min-height: 100dvh;
     max-height: 100svh;
+    max-height: 100dvh;
     padding: 0;
   }
 
   .content-scroll {
-    padding-top: max(42px, env(safe-area-inset-top));
+    padding-top: calc(env(safe-area-inset-top) + 24px);
+    padding-right: max(20px, env(safe-area-inset-right));
+    padding-left: max(20px, env(safe-area-inset-left));
+  }
+
+  .tabbar {
+    height: calc(84px + env(safe-area-inset-bottom));
+    flex-basis: calc(84px + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .add-button {
+    bottom: calc(48px + env(safe-area-inset-bottom));
   }
 }
 
@@ -914,14 +979,17 @@ body.is-task-dragging {
   :root:is(.is-touch-device, .is-compact-landscape) .phone {
     width: 100%;
     height: 100svh;
+    height: 100dvh;
     min-height: 100svh;
+    min-height: 100dvh;
     max-height: 100svh;
+    max-height: 100dvh;
     border-radius: 0;
     box-shadow: none;
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll {
-    padding: max(14px, env(safe-area-inset-top)) 16px 18px;
+    padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .workspace {

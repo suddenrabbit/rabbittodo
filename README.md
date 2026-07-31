@@ -1,69 +1,187 @@
-# RabbitToDo · Cloudflare 版本
+# RabbitToDo 1.0
 
-这是 RabbitToDo 的独立 Cloudflare 部署包：
+RabbitToDo 是一个面向个人使用的轻量待办 PWA，围绕“快速记录、跨设备同步、低干扰管理”设计。它可以安装到 iPhone、iPad 和桌面设备，并根据窗口横竖比例切换响应式布局。
 
-- **Cloudflare Workers**：提供静态 PWA 文件和 `/api/*` 接口；
-- **Cloudflare D1**：替代原服务器上的 SQLite；
-- **GitHub**：保存源代码，并可触发 Cloudflare 自动部署。
+当前生产地址：[todo.srabbitwork.site](https://todo.srabbitwork.site)
 
-现有的 6 位身份码机制保持不变。它只用于隔离数据，**不是安全认证**；部署至公网后请勿存储敏感信息。
+当前 1.0 基线：
 
-## 目录
+- Git commit：`800d017`
+- 应用版本：`v20260731.204635`
+- Service Worker 缓存：`rabbittodo-v34`
+- 数据平台：Cloudflare Workers + D1
+- 源代码：GitHub `suddenrabbit/rabbittodo`
+
+## 1.0 功能概览
+
+### 任务管理
+
+- “待办”和“已办”两个主页面，默认进入待办。
+- 任务支持标题、详情、颜色、多个标签、计划完成日期和状态。
+- 任务状态包括默认、进行中、暂停和已完成。
+- 详情在任务卡片中单行截断展示，点击卡片进入完整编辑。
+- 计划日期可留空；无日期任务不判断逾期。
+- 逾期任务显示浅红色背景、超期状态和超期天数；未来任务显示剩余天数。
+- 已完成任务记录并展示完成日期，跨年日期显示完整年份。
+- 动态标签和颜色筛选；横屏默认展开筛选区，筛选按钮自动换行。
+
+### 排序与置顶
+
+- 支持鼠标和触摸拖动，带跟手位移、重排动画和边缘自动滚动。
+- 待办任务分为置顶事项与普通待办；拖入或拖出置顶区域会自动切换置顶状态。
+- 没有置顶任务时，拖动过程中会临时出现置顶分割线。
+- 手动排序位置优先于自动排序规则。
+- 没有手动位置时，待办依次参考置顶时间、计划日期、任务状态、创建时间。
+- 已办事项默认按完成时间倒序；手动拖动后保留手动顺序。
+- 已置顶任务完成后保留内部置顶属性，重新切回待办时回到置顶区域。
+
+### 账户与登录（下一版本本地开发中）
+
+- 用户名用于登录和界面展示，长度为 2–10 位；英文大小写按同一用户名处理。
+- 新用户名确认一次密码后自动创建并登录，不再进入管理员审批流程。
+- 既有 6 位身份码用户首次打开新版时，需使用原身份码并设置用户名、密码；升级不改变其任务归属和任务密文。
+- 管理后台位于 `/console/`，支持查看、启用、禁用账号，以及生成一次性密码重置码。
+- 历史 `pending` 账号在 migration 中自动转为 `enabled`，已有 `disabled` 状态保持不变。
+
+### 内容加密
+
+- 既有用户继续使用原 6 位身份码作为固定加密种子；新用户使用独立生成的随机内部身份和 256 位随机加密种子。
+- 密码用于解锁固定加密种子，而不直接作为任务密钥；修改或重置密码只重新包裹同一个种子，不改任务密文。
+- 任务标题和详情在发送到 Worker 前加密，D1 中保存 `rtenc:v1:...` 密文。
+- 标签、颜色、日期、状态和排序字段保持明文，以支持服务端存储和客户端筛选排序。
+- 旧的明文任务由新版客户端首次读取后在后台分批加密回写。
+- 为支持管理员密码重置，服务端使用稳定的 `SERVER_MASTER_KEY` 保存加密种子的恢复副本；这意味着该模型不是服务端不可解密的零知识架构。
+
+### PWA 与多端体验
+
+- 提供应用图标、启动 Splash、Service Worker 离线缓存和版本更新检查。
+- PWA 从后台恢复时先检查并接管新 Service Worker，再同步任务，避免旧脚本读取新格式数据。
+- 在可见状态下每 30 秒同步一次任务；回到前台时主动检查版本和数据。
+- 新增、编辑、完成、删除和排序采用乐观更新，界面先响应，数据库写入在后台串行执行。
+- 支持 iPhone、iPad、macOS Safari 和桌面宽屏；宽大于高时使用横屏双栏布局。
+
+## 技术架构
 
 ```text
-public/                 PWA 前端资源
-src/worker.js           Worker API，接口与旧 Node 服务兼容
-migrations/             D1 数据库结构迁移
-scripts/                SQLite 数据迁移辅助脚本
-wrangler.jsonc          Cloudflare 配置
+public/                  PWA 前端静态资源
+public/console/          用户管理后台
+src/worker.js            Cloudflare Worker API
+migrations/              D1 数据库增量迁移
+scripts/                 SQLite 数据导入辅助脚本
+wrangler.jsonc           Worker、静态资源和 D1 绑定配置
+DEVELOPMENT_CONVENTIONS.md  开发、验证、版本和发布约定
+NEXT_VERSION_PROMPT.md      新对话启动 Prompt
 ```
 
-## 首次部署
+前端为无框架的 HTML、CSS 和 JavaScript；后端由 Cloudflare Worker 提供 `/api/*`，D1 保存账号、会话、一次性重置记录与任务数据。
 
-需要 Node.js 22+、pnpm，以及 Cloudflare 账户。
+## 本地开发
+
+环境要求：Node.js 22+、pnpm。
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run db:migrate:local
+pnpm dev --port 8792
+```
+
+本地地址通常为 [http://localhost:8792](http://localhost:8792)。使用身份码 `246810` 验证既有用户首次升级，也可以输入一个新用户名验证注册流程。本地 Wrangler 使用模拟 D1，不会修改生产数据库。
+
+本地开发需在被 Git 忽略的 `.dev.vars` 中配置仅供开发使用的主密钥：
+
+```text
+SERVER_MASTER_KEY=rabbittodo-local-development-master-key-not-for-production
+```
+
+该值仅供本地使用。生产环境必须设置独立、至少 32 位、稳定且妥善备份的 `SERVER_MASTER_KEY`，服务端没有固定主密钥回退。
+
+常用检查：
+
+```bash
+node --check public/app.js
+node --check public/sw.js
+node --check src/worker.js
+node --check public/console/app.js
+git diff --check
+git status --short
+```
+
+完整协作规则见 [DEVELOPMENT_CONVENTIONS.md](./DEVELOPMENT_CONVENTIONS.md)。
+
+## 首次部署
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm exec wrangler login
 pnpm run db:create
+pnpm exec wrangler secret put SERVER_MASTER_KEY
 ```
 
-最后一条命令会输出 D1 的 `database_id`。将它填写到 `wrangler.jsonc` 中的：
-
-```json
-"database_id": "00000000-0000-0000-0000-000000000000"
-```
-
-然后创建生产数据库表并部署：
+把命令输出的 `database_id` 写入 `wrangler.jsonc`，然后执行：
 
 ```bash
 pnpm run db:migrate:remote
 pnpm run deploy
 ```
 
-部署完成后，Cloudflare 会给出 `*.workers.dev` 地址；在 Workers & Pages 项目中绑定自定义域名即可启用正式地址与 HTTPS。Workers 可将静态资源与 API 一并部署，`/api/*` 会由 Worker 处理，其他请求由静态资源服务处理。
+Cloudflare Git 集成可关联 GitHub `main` 分支自动部署。正式环境必须使用 HTTPS，才能完整支持 iOS PWA 和 Web Crypto。`SERVER_MASTER_KEY` 应使用高熵随机值，后续不可随意更换或遗失，否则管理员密码重置将无法恢复既有用户的加密种子。
 
-## 本地开发
+## 日常发布
 
-首次本地运行先创建本地 D1 数据库：
+仅当前改动包含新的数据库 migration 时，先执行：
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm run db:migrate:local
-pnpm run dev
+pnpm run db:migrate:remote
 ```
 
-`wrangler dev` 会使用本地模拟的 D1 数据库，不会读取或修改线上数据。
+本次账户升级需先配置生产 `SERVER_MASTER_KEY`，再执行 `migrations/0006_user_accounts.sql`，确认迁移成功后才可部署依赖新字段的代码。迁移只为既有账号表补充可空字段并新增会话、重置码表，不修改或重建任务表；既有 `pending` 自动启用，`disabled` 保持不变。
 
-## 从现有 SQLite 导入数据
+其他发布同样应在确认 migration 成功后再推送 Git，由 Cloudflare 自动部署。迁移必须是增量且保护既有数据，禁止通过删除或重建生产表来完成普通升级。
 
-在导入期间，先停止旧服务或确保不再写入旧数据库。建议先做在线备份：
+### 发布前记录与回退
+
+包含 D1 migration 的发布，在执行前先记录当前 Worker 版本和 D1 Time Travel bookmark：
+
+```bash
+pnpm exec wrangler deployments list
+pnpm exec wrangler d1 time-travel info rabbittodo
+```
+
+本次账户升级的推荐顺序是：确认生产 `SERVER_MASTER_KEY` 已配置且已有安全备份，记录上述回退点，执行 `pnpm run db:migrate:remote`，确认成功后再部署代码并完成登录、旧用户升级、任务读取和管理后台烟雾测试。
+
+如果发布后只是前端或 Worker 代码故障，优先在 Cloudflare Dashboard 的 **Workers & Pages → rabbittodo → Deployments** 回退到上一稳定版本，或使用：
+
+```bash
+pnpm exec wrangler rollback [上一稳定版本 ID]
+```
+
+代码回退不会自动回退 D1。本次 `0006_user_accounts.sql` 是增量迁移，保留新增列和新表不会妨碍 1.0 Worker 访问原账号与任务表，因此普通故障不应恢复数据库。临时回到 1.0 后，新注册账号无法通过旧身份码界面登录，已升级的旧用户也可能需要再次使用原身份码；应尽快修复并重新发布新版。
+
+只有 migration 错误或生产数据被破坏时，才停止写入并使用发布前 bookmark 恢复 D1：
+
+```bash
+pnpm exec wrangler d1 time-travel restore rabbittodo --bookmark=[发布前 bookmark]
+```
+
+Time Travel 会原地覆盖数据库，发布后新产生的账号、任务和修改会丢失，因此它属于最后手段，执行前必须再次确认目标 bookmark，并记录恢复命令返回的 `previous_bookmark`，以便必要时撤销恢复。数据库恢复到旧结构后，再把 Worker 回退到对应的旧版本。
+
+仅修改前端缓存资源时，需要同步更新：
+
+- `public/app.js` 中的 `APP_VERSION`
+- `public/app.js` 中的 `EXPECTED_SERVICE_WORKER_VERSION`
+- `public/sw.js` 中的缓存版本
+
+文档或纯后端改动不应机械地升级 Service Worker；每次提交前都要根据实际缓存影响评估。
+
+## 从 SQLite 导入 D1
+
+先停止旧服务写入并备份：
 
 ```bash
 sqlite3 /path/to/todo.sqlite ".backup '/tmp/todo-backup.sqlite'"
 ```
 
-先按“首次部署”创建 D1 表，再从备份导出数据：
+初始化 D1 后导出并导入：
 
 ```bash
 chmod +x scripts/export-sqlite-for-d1.sh
@@ -71,36 +189,13 @@ chmod +x scripts/export-sqlite-for-d1.sh
 pnpm exec wrangler d1 execute rabbittodo --remote --file=/tmp/rabbittodo-data.sql
 ```
 
-脚本仅导出 `identities` 和 `tasks` 的 INSERT 数据；表结构始终由 `migrations/` 管理。它兼容原百度云服务器的旧 SQLite 结构：若来源库尚未包含 `details` 与 `status` 两列，导入时会分别补为空字符串与 `none`。导入后在新地址输入原来的身份码，核对任务数、标签、完成状态及排序，再停用旧服务。
+表结构由 `migrations/` 管理，导入脚本只负责数据。导入完成后应核对身份码数量、任务数量、完成状态、标签和排序，再停用旧服务。
 
-## GitHub 自动部署
+## 已知边界与后续方向
 
-1. 将本目录作为仓库根目录推送到 GitHub。
-2. 在 Cloudflare Workers & Pages 中连接该 GitHub 仓库，并选择 `main` 为生产分支。
-3. 在 Cloudflare 的部署设置中执行 `pnpm install --frozen-lockfile && pnpm run deploy`，或使用 Workers 的 Git 集成功能创建自动部署。
-4. 为预览分支启用 Preview deployment；合并到 `main` 后自动发布生产版本。
-
-首次仍建议在本机执行一次 `pnpm run deploy`，以验证 D1 绑定和域名。之后的部署应以 GitHub 推送为准。
-
-## 日常命令
-
-```bash
-# 预览本地版本
-pnpm run dev
-
-# 应用新增的 D1 migration
-pnpm run db:migrate:remote
-
-# 手动发布 Worker（通常由 GitHub 自动部署替代）
-pnpm run deploy
-```
-
-## 自动刷新与请求量
-
-前端会在回到前台时同步，并在可见状态下每 30 秒拉取一次任务。新增、编辑、完成、删除与排序采用乐观更新：界面立即响应，数据库写入在后台按操作顺序串行完成；若写入失败，应用会提示并恢复服务器中的最新数据。新任务会加入未完成事项顶部；未完成事项遵循手动排序，已完成事项显示在底部的“已完成”区并按完成时间倒序。对于个人或少量设备使用，这只是很小的 D1 读取负载；Worker 端保持了 `Cache-Control: no-store`，避免任务数据被缓存为旧内容。
-
-## HTTPS 与 PWA
-
-Cloudflare 的 `workers.dev` 地址和绑定后的 HTTPS 域名都能满足 iPhone/iPad Safari 的 Service Worker 与安装式 PWA 要求。不要再以 IP + HTTP 作为正式访问地址。
-
-## TODO：really user identity
+- 既有用户继续沿用 6 位身份码作为加密种子，兼容性优先，但其种子空间仍只有 100 万种组合；新用户不受此限制。
+- 解锁后的加密种子只保存在当前浏览器会话的 `sessionStorage`。同一会话刷新可继续使用，完全关闭浏览器后即使服务端会话尚有效，也需要再次输入密码解锁。
+- 登录失败限速目前保存在单个 Worker 实例内，正式扩大使用规模前可迁移到 Durable Object、KV 或其他跨实例方案。
+- 管理后台继续保留默认密码 `zhoumeng1987` 的哈希回退，源码不保存明文，但默认口令本身仍属于过渡方案；生产可用 Worker Secret `ADMIN_PASSWORD` 覆盖。
+- 管理员重置依赖 `SERVER_MASTER_KEY` 恢复并重新包裹固定加密种子；应限制后台权限并安全备份该主密钥。
+- 历史明文自动加密逻辑应保留过渡期；确认生产 D1 不再存在明文后，可在后续版本评估清理并强制只接受密文。

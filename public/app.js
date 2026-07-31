@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260731.204635";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v34";
+const APP_VERSION = "v20260801.002112";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v40";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -9,6 +9,8 @@ const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const ENCRYPTION_PREFIX = "rtenc:v1:";
 const ENCRYPTION_SALT = "RabbitToDo task content v1";
 const ENCRYPTION_ITERATIONS = 120_000;
+const VAULT_ITERATIONS = 210_000;
+const USERNAME_PATTERN = /^[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_]{1,9}$/u;
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 document.documentElement.classList.toggle("is-ipad", isIPad);
@@ -54,8 +56,9 @@ let encryptionKeyPromise = null;
 const savedIdentity = localStorage.getItem("todo-identity") || "";
 
 const state = {
-  identity: savedIdentity, identityDraft: sessionStorage.getItem("todo-identity-draft") || "",
-  identityStatus: "", identityPromptOpen: !savedIdentity, identitySubmitting: false, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
+  identity: "", username: "", encryptionSeed: "", authMode: savedIdentity ? "upgrade" : "login", authPromptOpen: true, authSubmitting: false, authDirty: false,
+  authError: "", authUsername: "", authPassword: "", authConfirm: "", authResetCode: "", identityDraft: savedIdentity,
+  passwordDialog: false, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
 };
 
 updateViewportClasses();
@@ -126,7 +129,7 @@ function checkForServiceWorkerUpdate({ force = false } = {}) {
 }
 
 function reloadForServiceWorkerUpdate() {
-  if (!serviceWorkerReloadPending || isReloadingForServiceWorker || !state.identity || state.identityPromptOpen || state.editor || pendingMutations) return;
+  if (!serviceWorkerReloadPending || isReloadingForServiceWorker || (state.authPromptOpen && state.authDirty) || state.authSubmitting || state.editor || pendingMutations) return;
   isReloadingForServiceWorker = true;
   window.location.reload();
 }
@@ -171,15 +174,15 @@ function base64ToBytes(value) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-function encryptionKeyFor(identity = state.identity) {
-  if (!/^\d{6}$/.test(identity) || !window.crypto?.subtle) {
+function encryptionKeyFor(seed = state.encryptionSeed) {
+  if (!seed || !window.crypto?.subtle) {
     throw new Error("当前浏览器无法启用任务内容加密");
   }
-  if (encryptionKeyIdentity === identity && encryptionKeyPromise) return encryptionKeyPromise;
-  encryptionKeyIdentity = identity;
+  if (encryptionKeyIdentity === seed && encryptionKeyPromise) return encryptionKeyPromise;
+  encryptionKeyIdentity = seed;
   encryptionKeyPromise = crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(identity),
+    new TextEncoder().encode(seed),
     "PBKDF2",
     false,
     ["deriveKey"],
@@ -192,7 +195,7 @@ function encryptionKeyFor(identity = state.identity) {
   return encryptionKeyPromise;
 }
 
-async function encryptText(value, identity = state.identity) {
+async function encryptText(value, identity = state.encryptionSeed) {
   const plaintext = String(value || "");
   if (!plaintext || isEncryptedText(plaintext)) return plaintext;
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -207,7 +210,7 @@ async function encryptText(value, identity = state.identity) {
   return `${ENCRYPTION_PREFIX}${bytesToBase64(packed)}`;
 }
 
-async function decryptText(value, identity = state.identity) {
+async function decryptText(value, identity = state.encryptionSeed) {
   const stored = String(value || "");
   if (!isEncryptedText(stored)) return stored;
   try {
@@ -219,11 +222,11 @@ async function decryptText(value, identity = state.identity) {
     );
     return new TextDecoder().decode(decrypted);
   } catch {
-    throw new Error("任务内容解密失败，请确认身份码是否正确");
+    throw new Error("暂时无法读取任务内容，请重新登录后再试");
   }
 }
 
-async function encryptTaskContent(task, identity = state.identity) {
+async function encryptTaskContent(task, identity = state.encryptionSeed) {
   const [title, details] = await Promise.all([
     encryptText(task.title, identity),
     encryptText(task.details || "", identity),
@@ -231,7 +234,7 @@ async function encryptTaskContent(task, identity = state.identity) {
   return { ...task, title, details };
 }
 
-async function decryptTaskContent(task, identity = state.identity) {
+async function decryptTaskContent(task, identity = state.encryptionSeed) {
   const contentEncrypted = isEncryptedText(task.title) && (!task.details || isEncryptedText(task.details));
   const [title, details] = await Promise.all([
     decryptText(task.title, identity),
@@ -299,86 +302,209 @@ function datePicker() {
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
-    headers: { "Content-Type": "application/json", "X-Identity-Code": state.identity, ...(options.headers || {}) },
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   const payload = await response.json();
   if (!response.ok) {
     const error = new Error(payload.error || "操作未完成");
     error.status = response.status;
-    error.identityStatus = payload.identityStatus || "";
+    error.code = payload.code || "";
     throw error;
   }
   return decryptApiPayload(payload);
 }
 
-function showIdentityStatus(code, status, { blockCurrent = false } = {}) {
-  if (blockCurrent) {
-    localStorage.removeItem("todo-identity");
-    state.identity = "";
-    state.tasks = [];
-  }
-  state.identityDraft = code;
-  state.identityStatus = status;
-  state.identitySubmitting = false;
-  state.identityPromptOpen = true;
-  state.editor = null;
-  state.datePicker = null;
-  sessionStorage.setItem("todo-identity-draft", code);
-  render();
+async function vaultKeyFor(password, salt, usages) {
+  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt: new TextEncoder().encode(salt), iterations: VAULT_ITERATIONS, hash: "SHA-256" }, material, { name: "AES-GCM", length: 256 }, false, usages);
 }
 
-function resetIdentityCandidate() {
-  sessionStorage.removeItem("todo-identity-draft");
-  state.identityDraft = "";
-  state.identityStatus = "";
-  state.identitySubmitting = false;
-  render();
+function randomBase64(size) { return bytesToBase64(crypto.getRandomValues(new Uint8Array(size))); }
+
+async function wrapEncryptionSeed(seed, password, salt) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await vaultKeyFor(password, salt, ["encrypt"]), new TextEncoder().encode(seed)));
+  const packed = new Uint8Array(iv.length + encrypted.length); packed.set(iv); packed.set(encrypted, iv.length);
+  return `rtvault:v1:${bytesToBase64(packed)}`;
 }
 
-function closeIdentityPrompt() {
-  if (!state.identity) return;
-  sessionStorage.removeItem("todo-identity-draft");
-  state.identityDraft = "";
-  state.identityStatus = "";
-  state.identitySubmitting = false;
-  state.identityPromptOpen = false;
-  render();
-  reloadForServiceWorkerUpdate();
+async function unwrapEncryptionSeed(wrapped, password, salt) {
+  if (!String(wrapped || "").startsWith("rtvault:v1:")) throw new Error("账号信息异常，请重新登录");
+  try {
+    const packed = base64ToBytes(wrapped.slice("rtvault:v1:".length));
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: packed.slice(0, 12) }, await vaultKeyFor(password, salt, ["decrypt"]), packed.slice(12)));
+  } catch { throw new Error("密码校验失败，请重新输入"); }
 }
 
-function openIdentityPrompt() {
-  sessionStorage.removeItem("todo-identity-draft");
-  state.identityDraft = "";
-  state.identityStatus = "";
-  state.identitySubmitting = false;
-  state.identityPromptOpen = true;
-  render();
-}
-
-function handleIdentityAccessError(error) {
-  if (!error.identityStatus) return false;
-  showIdentityStatus(state.identity || state.identityDraft, error.identityStatus, { blockCurrent: true });
-  return true;
-}
-
-async function verifyIdentity(code) {
-  const result = await api("/api/identity", { method: "POST", body: JSON.stringify({ code }) });
-  if (result.status !== "enabled") {
-    showIdentityStatus(code, result.status);
-    return;
-  }
-  localStorage.setItem("todo-identity", code);
-  sessionStorage.removeItem("todo-identity-draft");
-  state.identityDraft = "";
-  state.identityStatus = "";
-  state.identity = code;
-  state.identityPromptOpen = false;
+async function enterAccount(account, password) {
+  const seed = await unwrapEncryptionSeed(account.passwordWrappedSeed, password, account.vaultSalt);
+  state.identity = "authenticated";
+  state.username = account.username;
+  state.encryptionSeed = seed;
+  encryptionKeyIdentity = "";
+  encryptionKeyPromise = null;
+  state.authPromptOpen = false;
+  state.authSubmitting = false;
+  state.authDirty = false;
+  state.authError = "";
+  state.authUsername = account.username;
+  state.authPassword = "";
+  state.authConfirm = "";
+  state.authResetCode = "";
   state.tasks = [];
   state.view = "todo";
-  reloadForServiceWorkerUpdate();
-  if (serviceWorkerReloadPending || isReloadingForServiceWorker) return;
-  if (serviceWorkerRegistration) await synchronizeForeground();
-  else await loadTasks();
+  localStorage.removeItem("todo-identity");
+  sessionStorage.setItem("rabbittodo-session-seed", seed);
+  sessionStorage.setItem("rabbittodo-session-username", account.username);
+  if (serviceWorkerRegistration) await synchronizeForeground(); else await loadTasks();
+}
+
+function openAuth(mode = "login") {
+  if (state.authMode !== mode) {
+    state.authPassword = "";
+    state.authConfirm = "";
+    state.authResetCode = "";
+  }
+  state.authMode = mode;
+  state.authPromptOpen = true;
+  state.authSubmitting = false;
+  state.authDirty = false;
+  state.authError = "";
+  render();
+}
+
+function authSubmitLabel(mode = state.authMode) {
+  return mode === "upgrade" ? "保存并继续" : mode === "register" ? "创建账号" : mode === "reset" ? "设置新密码" : "登录";
+}
+
+function setAuthSubmitting(submitting) {
+  state.authSubmitting = submitting;
+  const panel = document.querySelector("#auth-panel");
+  if (!panel) return;
+  panel.classList.toggle("is-submitting", submitting);
+  panel.querySelectorAll("input, button").forEach((control) => { control.disabled = submitting; });
+  const submitButton = panel.querySelector('[data-action="submit-auth"]');
+  if (submitButton) submitButton.textContent = submitting ? "处理中…" : authSubmitLabel();
+}
+
+function showAuthError(message, focusSelector = "#auth-password") {
+  state.authSubmitting = false;
+  state.authError = message || "操作未完成，请重试";
+  const panel = document.querySelector("#auth-panel");
+  if (!panel) {
+    render();
+    requestAnimationFrame(() => document.querySelector(focusSelector)?.focus());
+    return;
+  }
+  let errorMessage = panel.querySelector(".auth-error");
+  if (!errorMessage) {
+    errorMessage = document.createElement("p");
+    errorMessage.className = "auth-error";
+    errorMessage.setAttribute("role", "alert");
+    panel.querySelector('[data-action="submit-auth"]')?.before(errorMessage);
+  }
+  errorMessage.textContent = state.authError;
+  setAuthSubmitting(false);
+  requestAnimationFrame(() => document.querySelector(focusSelector)?.focus());
+}
+
+function continueAsRegistration() {
+  state.authMode = "register";
+  state.authConfirm = "";
+  const panel = document.querySelector("#auth-panel");
+  if (!panel) return render();
+  panel.querySelector("h2").textContent = "创建 RabbitToDo 账号";
+  panel.querySelector(":scope > span").textContent = "创建账号后，你可以在不同设备上继续管理待办。";
+  const passwordInput = panel.querySelector("#auth-password");
+  passwordInput.setAttribute("autocomplete", "new-password");
+  const confirmInput = document.createElement("input");
+  confirmInput.id = "auth-confirm";
+  confirmInput.type = "password";
+  confirmInput.autocomplete = "new-password";
+  confirmInput.minLength = 8;
+  confirmInput.maxLength = 256;
+  confirmInput.placeholder = "再次输入密码";
+  confirmInput.required = true;
+  passwordInput.after(confirmInput);
+  panel.querySelector(".auth-links").innerHTML = '<button type="button" data-action="auth-login">返回登录</button><button type="button" data-action="auth-upgrade">使用原有身份码</button>';
+  showAuthError("这是一个新用户名，请再次输入密码完成注册", "#auth-confirm");
+}
+
+async function submitAuthentication() {
+  if (state.authSubmitting) return;
+  const mode = state.authMode;
+  const username = document.querySelector("#auth-username").value.normalize("NFKC").trim();
+  const password = document.querySelector("#auth-password").value;
+  const confirmPassword = document.querySelector("#auth-confirm")?.value || "";
+  const resetCode = document.querySelector("#auth-reset-code")?.value || "";
+  const legacyIdentityCode = document.querySelector("#auth-identity")?.value || "";
+  state.authUsername = username;
+  state.authPassword = password;
+  state.authConfirm = confirmPassword;
+  state.authResetCode = resetCode;
+  state.identityDraft = legacyIdentityCode || state.identityDraft;
+  state.authError = "";
+  if (!USERNAME_PATTERN.test(username)) {
+    showAuthError("用户名为 2-10 个字符，须以中文或英文开头", "#auth-username");
+    return;
+  }
+  if (password.length < 8 || password.length > 256) {
+    showAuthError(password.length < 8 ? "密码至少 8 位" : "密码不能超过 256 位", "#auth-password");
+    return;
+  }
+  if (mode === "upgrade" && !/^\d{6}$/.test(legacyIdentityCode)) {
+    showAuthError("请输入 6 位原身份码", "#auth-identity");
+    return;
+  }
+  if (mode === "reset" && !resetCode.trim()) {
+    showAuthError("请输入重置码", "#auth-reset-code");
+    return;
+  }
+  if ((mode === "register" || mode === "upgrade" || mode === "reset") && password !== confirmPassword) {
+    showAuthError("两次输入的密码不一致", "#auth-confirm");
+    return;
+  }
+  setAuthSubmitting(true);
+  try {
+    let response;
+    if (mode === "login") {
+      try {
+        response = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+      } catch (error) {
+        if (error.code !== "registration_required") throw error;
+        continueAsRegistration();
+        return;
+      }
+    } else if (mode === "reset") {
+      response = await api("/api/auth/reset", { method: "POST", body: JSON.stringify({ username, resetCode, newPassword: password }) });
+    } else {
+      const salt = randomBase64(16);
+      const seed = mode === "upgrade" ? legacyIdentityCode : randomBase64(32);
+      const payload = { username, password, vaultSalt: salt, passwordWrappedSeed: await wrapEncryptionSeed(seed, password, salt), encryptionSeed: seed };
+      if (mode === "upgrade") payload.identityCode = seed;
+      response = await api(mode === "upgrade" ? "/api/auth/upgrade" : "/api/auth/register", { method: "POST", body: JSON.stringify(payload) });
+    }
+    await enterAccount(response.account, password);
+  } catch (error) {
+    if (mode === "login") {
+      state.authPassword = "";
+      const passwordInput = document.querySelector("#auth-password");
+      if (passwordInput) passwordInput.value = "";
+    }
+    showAuthError(error.message, mode === "upgrade" && !legacyIdentityCode ? "#auth-identity" : "#auth-password");
+  }
+}
+
+function handleAuthenticationError(error) {
+  if (error.status !== 401 && error.status !== 403) return false;
+  state.authUsername = state.username || state.authUsername;
+  state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = [];
+  state.authPassword = ""; state.authConfirm = ""; state.authResetCode = "";
+  sessionStorage.removeItem("rabbittodo-session-seed"); sessionStorage.removeItem("rabbittodo-session-username");
+  openAuth("login");
+  state.authError = error.status === 403 ? "账号已禁用" : "登录状态已失效，请重新登录";
+  render();
+  return true;
 }
 
 // Keep the interface responsive while preserving the order of database writes.
@@ -389,7 +515,7 @@ function saveInBackground(operation) {
     try {
       await operation();
     } catch (error) {
-      if (handleIdentityAccessError(error)) return;
+      if (handleAuthenticationError(error)) return;
       alert(`${error.message}，已恢复服务器中的最新数据。`);
       await loadTasks({ quiet: true });
     } finally {
@@ -438,7 +564,7 @@ async function loadTasks({ quiet = false } = {}) {
       migrateLegacyTaskContent(state.tasks.filter((task) => !task._contentEncrypted));
       lastTaskSyncAt = Date.now();
     } catch (error) {
-      if (!handleIdentityAccessError(error) && !quiet && !isReloadingForServiceWorker) alert(error.message);
+      if (!handleAuthenticationError(error) && !quiet && !isReloadingForServiceWorker) alert(error.message);
     } finally {
       taskSyncPromise = null;
     }
@@ -448,7 +574,7 @@ async function loadTasks({ quiet = false } = {}) {
 }
 
 function refreshActiveTasks(force = false) {
-  if (!state.identity || state.identityPromptOpen || state.editor || pointerDrag || pendingMutations || serviceWorkerUpdatePromise || foregroundSyncPromise || serviceWorkerReloadPending || document.visibilityState === "hidden") return;
+  if (!state.identity || state.authPromptOpen || state.editor || pointerDrag || pendingMutations || serviceWorkerUpdatePromise || foregroundSyncPromise || serviceWorkerReloadPending || document.visibilityState === "hidden") return;
   // pageshow、focus 与 visibilitychange 往往会连续触发；前台恢复只保留一次读取。
   const interval = force ? 1_500 : 30_000;
   if (Date.now() - lastTaskSyncAt > interval) loadTasks({ quiet: true });
@@ -608,22 +734,32 @@ function editor() {
 }
 
 function identityGate() {
-  if (!state.identityPromptOpen) return "";
-  const submitting = state.identitySubmitting;
-  const closeButton = state.identity ? `<button class="identity-close-button" type="button" data-action="close-identity" aria-label="关闭身份码窗口" ${submitting ? "disabled" : ""}>×</button>` : "";
-  if (state.identityStatus) {
-    const pending = state.identityStatus === "pending";
-    return `<div class="identity-gate"><section class="identity-card identity-status-card">${closeButton}<div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>${pending ? "请等待管理员审核确认" : "该身份码暂不可用"}</h2><strong class="identity-code-preview">${escapeHtml(state.identityDraft)}</strong><span>${pending ? "审核通过后即可使用。你可以稍后重新检查状态。" : "该身份码已禁用或审核未通过，请联系管理员。"}</span><button class="save-button" type="button" data-action="recheck-identity">重新检查状态</button><button class="identity-secondary-button" type="button" data-action="reset-identity">更换身份码</button></section></div>`;
-  }
-  return `<div class="identity-gate"><form class="identity-card ${submitting ? "is-submitting" : ""}" id="identity-form">${closeButton}<div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>今天，慢一点也没关系</h2><span>输入 6 位身份码，在本设备隔离你的待办数据。</span><input id="identity-code" value="${escapeHtml(state.identityDraft)}" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 位身份码" required ${submitting ? "disabled" : ""} /><button class="save-button identity-submit-button" type="submit" aria-busy="${submitting}" ${submitting ? "disabled" : ""}>${submitting ? '<i class="identity-submit-spinner"></i><span>正在进入</span>' : "开始记录"}</button></form></div>`;
+  if (!state.authPromptOpen) return "";
+  const submitting = state.authSubmitting;
+  const mode = state.authMode;
+  const isRegister = mode === "register" || mode === "upgrade";
+  const isReset = mode === "reset";
+  const title = mode === "upgrade" ? "继续使用原有待办" : isRegister ? "创建 RabbitToDo 账号" : isReset ? "重新设置密码" : "欢迎回来";
+  const hint = mode === "upgrade" ? "输入原来的 6 位身份码，再设置用户名和密码。" : isRegister ? "创建账号后，你可以在不同设备上继续管理待办。" : isReset ? "输入重置码并设置新密码，即可重新登录。" : "登录后，继续安排今天要做的事。";
+  const disabled = submitting ? "disabled" : "";
+  const legacy = mode === "upgrade" ? `<input id="auth-identity" value="${escapeHtml(state.identityDraft)}" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="原 6 位身份码" required ${disabled} />` : "";
+  const reset = isReset ? `<input id="auth-reset-code" value="${escapeHtml(state.authResetCode)}" autocomplete="one-time-code" maxlength="64" placeholder="重置码" required ${disabled} />` : "";
+  const confirm = isRegister || isReset ? `<input id="auth-confirm" value="${escapeHtml(state.authConfirm)}" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="再次输入密码" required ${disabled} />` : "";
+  const usernameInput = `<input id="auth-username" value="${escapeHtml(state.authUsername)}" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="2" maxlength="10" placeholder="用户名（2–10 位）" required ${disabled} />`;
+  const passwordInput = `<input id="auth-password" value="${escapeHtml(state.authPassword)}" type="password" autocomplete="${isRegister || isReset ? "new-password" : "current-password"}" minlength="8" maxlength="256" placeholder="密码（至少 8 位）" required ${disabled} />`;
+  const fields = isReset ? `${usernameInput}${reset}${passwordInput}${confirm}` : `${legacy}${usernameInput}${passwordInput}${confirm}`;
+  const errorMessage = state.authError ? `<p class="auth-error" role="alert">${escapeHtml(state.authError)}</p>` : "";
+  const submitLabel = authSubmitLabel(mode);
+  return `<div class="identity-gate"><section class="identity-card ${submitting ? "is-submitting" : ""}" id="auth-panel"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>${title}</h2><span>${hint}</span>${fields}${errorMessage}<button class="save-button identity-submit-button" type="button" data-action="submit-auth" ${submitting ? "disabled" : ""}>${submitting ? "处理中…" : submitLabel}</button><div class="auth-links">${mode !== "login" ? '<button type="button" data-action="auth-login">返回登录</button>' : '<button type="button" data-action="auth-register">创建新账号</button>'}${mode !== "upgrade" && mode !== "reset" ? '<button type="button" data-action="auth-upgrade">使用原有身份码</button>' : ""}${mode === "login" ? '<button type="button" data-action="auth-reset">使用重置码</button>' : ""}</div></section></div>`;
 }
 
 function pageHeader(heading) {
-  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的身份码"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>${state.identity || "······"}</span></button></header>`;
+  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>${escapeHtml(state.username || "我的")}</span></button></header>`;
 }
 
 function profilePage() {
-  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>我的身份码</p><strong>${state.identity.slice(0, 3)} ${state.identity.slice(3)}</strong><span>此代码仅用于隔离你的待办数据。</span><button data-action="switch-identity">切换身份码</button></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
+  const passwordForm = state.passwordDialog ? '<form id="change-password-form" class="account-form"><input id="current-password" type="password" placeholder="当前密码" required /><input id="new-password" type="password" placeholder="新密码（至少 8 位）" required /><input id="new-password-confirm" type="password" placeholder="再次输入新密码" required /><button class="save-button" type="submit">更新密码</button></form>' : "";
+  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span>${passwordForm}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
 }
 
 function render() {
@@ -864,6 +1000,7 @@ app.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-action]");
   if (button) {
     const action = button.dataset.action;
+    if (action === "submit-auth") return submitAuthentication();
     if (action === "add") return openEditor();
     if (action === "close-editor") {
       state.editor = null;
@@ -874,6 +1011,16 @@ app.addEventListener("click", async (event) => {
     }
     if (action === "view") { state.view = button.dataset.view; return render(); }
     if (action === "profile") { state.view = "profile"; return render(); }
+    if (action === "auth-login") return openAuth("login");
+    if (action === "auth-register") return openAuth("register");
+    if (action === "auth-upgrade") return openAuth("upgrade");
+    if (action === "auth-reset") return openAuth("reset");
+    if (action === "change-password") { state.passwordDialog = !state.passwordDialog; return render(); }
+    if (action === "logout") {
+      try { await api("/api/auth/logout", { method: "POST", body: "{}" }); } catch {}
+      state.authUsername = state.username;
+      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; sessionStorage.removeItem("rabbittodo-session-seed"); sessionStorage.removeItem("rabbittodo-session-username"); encryptionKeyIdentity = ""; encryptionKeyPromise = null; return render();
+    }
     if (action === "toggle-filters") { state.filtersOpen = !state.filtersOpen; return render(); }
     if (action === "tag-filter") { state.tag = button.dataset.tag; return render(); }
     if (action === "color-filter") { state.color = button.dataset.color; return render(); }
@@ -887,13 +1034,6 @@ app.addEventListener("click", async (event) => {
     if (action === "pick-date") { state.editor.due_date = button.dataset.date; state.datePicker = null; return render(); }
     if (action === "clear-picker-date" || action === "clear-due-date") { state.editor.due_date = ""; state.datePicker = null; return render(); }
     if (action === "remove-tag") { state.draftTags = state.draftTags.filter((tag) => tag !== button.dataset.tag); return render(); }
-    if (action === "switch-identity") return openIdentityPrompt();
-    if (action === "reset-identity") return resetIdentityCandidate();
-    if (action === "close-identity") return closeIdentityPrompt();
-    if (action === "recheck-identity") {
-      try { await verifyIdentity(state.identityDraft); } catch (error) { alert(error.message); }
-      return;
-    }
     if (action === "toggle") {
       const id = Number(button.dataset.id);
       const task = state.tasks.find((item) => item.id === id);
@@ -926,14 +1066,25 @@ app.addEventListener("click", async (event) => {
 });
 
 app.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && event.target.closest("#auth-panel")) {
+    event.preventDefault();
+    submitAuthentication();
+    return;
+  }
   if (event.target.id !== "tag-input") return;
   if (event.key === "Enter") { event.preventDefault(); commitTag(); }
   if (event.key === "Backspace" && !event.target.value && state.draftTags.length) { state.draftTags.pop(); render(); document.querySelector("#tag-input")?.focus(); }
 });
 app.addEventListener("input", (event) => {
-  if (event.target.id === "identity-code") {
-    state.identityDraft = event.target.value;
-    sessionStorage.setItem("todo-identity-draft", state.identityDraft);
+  if (event.target.id?.startsWith("auth-")) {
+    state.authDirty = true;
+    state.authError = "";
+    event.target.closest("#auth-panel")?.querySelector(".auth-error")?.remove();
+    if (event.target.id === "auth-username") state.authUsername = event.target.value;
+    if (event.target.id === "auth-password") state.authPassword = event.target.value;
+    if (event.target.id === "auth-confirm") state.authConfirm = event.target.value;
+    if (event.target.id === "auth-reset-code") state.authResetCode = event.target.value;
+    if (event.target.id === "auth-identity") state.identityDraft = event.target.value;
   }
   if (event.target.id === "tag-input") state.tagInput = event.target.value;
   if (event.target.id === "task-title" && state.editor) state.editor.title = event.target.value;
@@ -942,21 +1093,14 @@ app.addEventListener("input", (event) => {
 app.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    if (event.target.id === "identity-form") {
-      if (state.identitySubmitting) return;
-      const code = document.querySelector("#identity-code").value;
-      state.identityDraft = code;
-      state.identitySubmitting = true;
-      render();
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      try {
-        await verifyIdentity(code);
-      } finally {
-        if (state.identitySubmitting) {
-          state.identitySubmitting = false;
-          if (state.identityPromptOpen) render();
-        }
-      }
+    if (event.target.id === "change-password-form") {
+      const currentPassword = document.querySelector("#current-password").value;
+      const newPassword = document.querySelector("#new-password").value;
+      if (newPassword !== document.querySelector("#new-password-confirm").value) throw new Error("两次输入的新密码不一致");
+      const salt = randomBase64(16);
+      const response = await api("/api/auth/password", { method: "POST", body: JSON.stringify({ currentPassword, newPassword, vaultSalt: salt, passwordWrappedSeed: await wrapEncryptionSeed(state.encryptionSeed, newPassword, salt) }) });
+      state.passwordDialog = false;
+      await enterAccount(response.account, newPassword);
       return;
     }
     if (event.target.id === "task-form") {
@@ -984,7 +1128,7 @@ app.addEventListener("submit", async (event) => {
         const temporaryId = nextTemporaryTaskId--;
         const pinnedAt = payload.pinned ? new Date().toISOString() : null;
         state.tasks.unshift({
-          id: temporaryId, identity_code: state.identity, title, details, color: payload.color, tags,
+          id: temporaryId, title, details, color: payload.color, tags,
           due_date: dueDate, completed: false, completed_at: null, status: payload.status, pinned: payload.pinned, pinned_at: pinnedAt,
           manual_position: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });
@@ -1025,10 +1169,32 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).then((registration) => {
     serviceWorkerRegistration = registration;
     watchServiceWorkerInstallation(registration);
-    synchronizeForeground();
-  }).catch(() => loadTasks({ quiet: true }));
+    bootstrapAfterServiceWorker();
+  }).catch(() => restoreSession());
 } else {
-  loadTasks({ quiet: true });
+  restoreSession();
 }
-// 身份码输入界面不依赖网络或 Service Worker，优先展示并保持输入过程稳定。
-if (!state.identity) render();
+
+async function restoreSession() {
+  if (savedIdentity) return render(); // Legacy local code must go through the explicit upgrade flow.
+  const seed = sessionStorage.getItem("rabbittodo-session-seed") || "";
+  const rememberedUsername = sessionStorage.getItem("rabbittodo-session-username") || "";
+  if (!seed || !rememberedUsername) return render();
+  try {
+    const response = await api("/api/auth/session");
+    if (!response.account || response.account.username !== rememberedUsername) throw new Error("会话不匹配");
+    state.identity = "authenticated"; state.username = response.account.username; state.encryptionSeed = seed; state.authPromptOpen = false;
+    encryptionKeyIdentity = ""; encryptionKeyPromise = null;
+    if (serviceWorkerRegistration) await synchronizeForeground(); else await loadTasks();
+  } catch { sessionStorage.removeItem("rabbittodo-session-seed"); sessionStorage.removeItem("rabbittodo-session-username"); render(); }
+}
+
+async function bootstrapAfterServiceWorker() {
+  await checkForServiceWorkerUpdate({ force: true });
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  reloadForServiceWorkerUpdate();
+  if (!serviceWorkerReloadPending && !isReloadingForServiceWorker) await restoreSession();
+}
+
+// Do not persist the fixed seed in localStorage. A session-only remembered seed keeps a
+// refreshed tab usable while requiring a password after the browser session ends.
