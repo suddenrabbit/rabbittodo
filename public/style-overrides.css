@@ -599,11 +599,32 @@ body.is-task-dragging {
 .tabbar {
   position: relative;
   inset: auto;
-  flex: 0 0 84px;
+  flex: 0 0 calc(84px + env(safe-area-inset-bottom));
 }
 
 .add-button {
-  bottom: 48px;
+  bottom: calc(48px + env(safe-area-inset-bottom));
+}
+
+.encryption-note {
+  position: absolute;
+  right: 0;
+  bottom: calc(4px + env(safe-area-inset-bottom));
+  left: 0;
+  margin: 0;
+  color: #aaa8b2;
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: .1px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.encryption-note i {
+  margin-right: 3px;
+  font-size: 8px;
+  font-style: normal;
 }
 
 .filter-panel {

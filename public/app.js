@@ -1,11 +1,14 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260731.200410";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v32";
+const APP_VERSION = "v20260731.201737";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v33";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
+const ENCRYPTION_PREFIX = "rtenc:v1:";
+const ENCRYPTION_SALT = "RabbitToDo task content v1";
+const ENCRYPTION_ITERATIONS = 120_000;
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 document.documentElement.classList.toggle("is-ipad", isIPad);
@@ -45,6 +48,8 @@ let pointerDrag = null;
 let suppressCardClickUntil = 0;
 let dragAutoScrollFrame = 0;
 let dragAutoScrollSpeed = 0;
+let encryptionKeyIdentity = "";
+let encryptionKeyPromise = null;
 const savedIdentity = localStorage.getItem("todo-identity") || "";
 
 const state = {
@@ -120,6 +125,95 @@ function dateInShanghai(value = new Date()) {
 }
 const today = () => dateInShanghai();
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
+const isEncryptedText = (value) => String(value || "").startsWith(ENCRYPTION_PREFIX);
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 8_192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8_192));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function encryptionKeyFor(identity = state.identity) {
+  if (!/^\d{6}$/.test(identity) || !window.crypto?.subtle) {
+    throw new Error("当前浏览器无法启用任务内容加密");
+  }
+  if (encryptionKeyIdentity === identity && encryptionKeyPromise) return encryptionKeyPromise;
+  encryptionKeyIdentity = identity;
+  encryptionKeyPromise = crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(identity),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  ).then((keyMaterial) => crypto.subtle.deriveKey({
+    name: "PBKDF2",
+    salt: new TextEncoder().encode(ENCRYPTION_SALT),
+    iterations: ENCRYPTION_ITERATIONS,
+    hash: "SHA-256",
+  }, keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]));
+  return encryptionKeyPromise;
+}
+
+async function encryptText(value, identity = state.identity) {
+  const plaintext = String(value || "");
+  if (!plaintext || isEncryptedText(plaintext)) return plaintext;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    await encryptionKeyFor(identity),
+    new TextEncoder().encode(plaintext),
+  ));
+  const packed = new Uint8Array(iv.length + encrypted.length);
+  packed.set(iv);
+  packed.set(encrypted, iv.length);
+  return `${ENCRYPTION_PREFIX}${bytesToBase64(packed)}`;
+}
+
+async function decryptText(value, identity = state.identity) {
+  const stored = String(value || "");
+  if (!isEncryptedText(stored)) return stored;
+  try {
+    const packed = base64ToBytes(stored.slice(ENCRYPTION_PREFIX.length));
+    const decrypted = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: packed.slice(0, 12) },
+      await encryptionKeyFor(identity),
+      packed.slice(12),
+    );
+    return new TextDecoder().decode(decrypted);
+  } catch {
+    throw new Error("任务内容解密失败，请确认身份码是否正确");
+  }
+}
+
+async function encryptTaskContent(task, identity = state.identity) {
+  const [title, details] = await Promise.all([
+    encryptText(task.title, identity),
+    encryptText(task.details || "", identity),
+  ]);
+  return { ...task, title, details };
+}
+
+async function decryptTaskContent(task, identity = state.identity) {
+  const contentEncrypted = isEncryptedText(task.title) && (!task.details || isEncryptedText(task.details));
+  const [title, details] = await Promise.all([
+    decryptText(task.title, identity),
+    decryptText(task.details || "", identity),
+  ]);
+  return { ...task, title, details, _contentEncrypted: contentEncrypted };
+}
+
+async function decryptApiPayload(payload) {
+  if (Array.isArray(payload.tasks)) payload.tasks = await Promise.all(payload.tasks.map((task) => decryptTaskContent(task)));
+  if (payload.task) payload.task = await decryptTaskContent(payload.task);
+  return payload;
+}
 const dateLabel = (date) => {
   if (!date) return "未安排";
   if (date === today()) return "今天";
@@ -183,7 +277,7 @@ async function api(path, options = {}) {
     error.identityStatus = payload.identityStatus || "";
     throw error;
   }
-  return payload;
+  return decryptApiPayload(payload);
 }
 
 function showIdentityStatus(code, status, { blockCurrent = false } = {}) {
@@ -285,12 +379,30 @@ function applyServerTask(task, localId = task.id, shouldRender = false) {
   if (shouldRender) render();
 }
 
+function migrateLegacyTaskContent(tasks) {
+  if (!tasks.length) return;
+  tasks.forEach((task) => { task._contentEncrypted = true; });
+  saveInBackground(async () => {
+    const encryptedTasks = await Promise.all(tasks.map(async (task) => {
+      const encrypted = await encryptTaskContent(task);
+      return { id: resolvedTaskId(task.id), title: encrypted.title, details: encrypted.details };
+    }));
+    for (let offset = 0; offset < encryptedTasks.length; offset += 50) {
+      await api("/api/tasks/encrypt", {
+        method: "POST",
+        body: JSON.stringify({ tasks: encryptedTasks.slice(offset, offset + 50) }),
+      });
+    }
+  });
+}
+
 async function loadTasks({ quiet = false } = {}) {
   if (!state.identity) return render();
   if (taskSyncPromise) return taskSyncPromise;
   taskSyncPromise = (async () => {
     try {
       state.tasks = (await api("/api/tasks")).tasks;
+      migrateLegacyTaskContent(state.tasks.filter((task) => !task._contentEncrypted));
       lastTaskSyncAt = Date.now();
     } catch (error) {
       if (!handleIdentityAccessError(error) && !quiet && !isReloadingForServiceWorker) alert(error.message);
@@ -493,7 +605,7 @@ function render() {
     ? profilePage()
     : `<section class="workspace workspace-${state.view}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}</main></section>`;
   app.innerHTML = `<section class="phone"><div class="content-scroll">${pageContent}</div>
-    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}`;
+    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button><p class="encryption-note"><i>🔒</i>任务内容已加密存储</p></nav></section>${editor()}${datePicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
     persistentAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
@@ -831,7 +943,8 @@ app.addEventListener("submit", async (event) => {
         state.editor = null;
         render();
         saveInBackground(async () => {
-          const response = await api(`/api/tasks/${resolvedTaskId(editingId)}`, { method: "PUT", body: JSON.stringify(payload) });
+          const encryptedPayload = await encryptTaskContent(payload);
+          const response = await api(`/api/tasks/${resolvedTaskId(editingId)}`, { method: "PUT", body: JSON.stringify(encryptedPayload) });
           applyServerTask(response.task, editingId);
         });
       } else {
@@ -846,7 +959,8 @@ app.addEventListener("submit", async (event) => {
         state.view = "todo";
         render();
         saveInBackground(async () => {
-          const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(payload) });
+          const encryptedPayload = await encryptTaskContent(payload);
+          const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(encryptedPayload) });
           applyServerTask(response.task, temporaryId, true);
         });
       }

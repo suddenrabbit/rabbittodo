@@ -2,6 +2,8 @@ const COLORS = new Set(["violet", "mint", "orange", "blue", "rose"]);
 const STATUSES = new Set(["none", "in_progress", "paused"]);
 const IDENTITY_STATUSES = new Set(["pending", "enabled", "disabled"]);
 const DEFAULT_ADMIN_PASSWORD = "zhoumeng1987";
+const ENCRYPTION_PREFIX = "rtenc:v1:";
+const ENCRYPTED_VALUE_PATTERN = /^rtenc:v1:[A-Za-z0-9+/]+={0,2}$/;
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -28,18 +30,39 @@ async function bodyFrom(request) {
   try { return raw ? JSON.parse(raw) : {}; } catch { throw new Error("请求格式无效"); }
 }
 
+function sanitizeTaskText(value, { field, plainLimit, encryptedLimit, required = false }) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    if (required) throw new Error(`请填写${field}`);
+    return "";
+  }
+  if (raw.startsWith(ENCRYPTION_PREFIX)) {
+    if (!ENCRYPTED_VALUE_PATTERN.test(raw) || raw.length > encryptedLimit) throw new Error(`${field}密文无效`);
+    return raw;
+  }
+  return raw.slice(0, plainLimit);
+}
+
 function sanitizeTask(input) {
-  const title = String(input.title || "").trim().slice(0, 200);
+  const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 200, encryptedLimit: 4_096, required: true });
   const color = COLORS.has(input.color) ? input.color : "violet";
   const tags = Array.isArray(input.tags)
     ? [...new Set(input.tags.map((tag) => String(tag).trim().replace(/^#/, "")).filter(Boolean))].slice(0, 12)
     : [];
-  const details = String(input.details || "").trim().slice(0, 2_000);
+  const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 2_000, encryptedLimit: 16_000 });
   const status = STATUSES.has(input.status) ? input.status : "none";
   const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.dueDate || "")) ? input.dueDate : null;
   const pinned = Boolean(input.pinned);
-  if (!title) throw new Error("请填写事项名称");
   return { title, color, tags, details, status, dueDate, pinned };
+}
+
+function sanitizeEncryptedTaskContent(input) {
+  const id = Number(input.id);
+  if (!Number.isInteger(id) || id <= 0) throw new Error("事项编号无效");
+  const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 0, encryptedLimit: 4_096, required: true });
+  const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 0, encryptedLimit: 16_000 });
+  if (!title.startsWith(ENCRYPTION_PREFIX) || (details && !details.startsWith(ENCRYPTION_PREFIX))) throw new Error("任务密文无效");
+  return { id, title, details };
 }
 
 function taskIdFrom(pathname) {
@@ -131,6 +154,17 @@ async function api(request, env, url) {
     ).bind(identity, task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, task.pinned ? 1 : 0, task.pinned ? 1 : 0).run();
     const created = await taskById(env.DB, Number(inserted.meta.last_row_id), identity);
     return json({ task: created }, 201);
+  }
+
+  if (request.method === "POST" && pathname === "/api/tasks/encrypt") {
+    const { tasks } = await bodyFrom(request);
+    if (!Array.isArray(tasks) || !tasks.length || tasks.length > 50) return json({ error: "任务密文数据无效" }, 400);
+    const encryptedTasks = tasks.map(sanitizeEncryptedTaskContent);
+    if (new Set(encryptedTasks.map((task) => task.id)).size !== encryptedTasks.length) return json({ error: "事项编号重复" }, 400);
+    await env.DB.batch(encryptedTasks.map((task) => env.DB.prepare(
+      "UPDATE tasks SET title = ?, details = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?",
+    ).bind(task.title, task.details, task.id, identity)));
+    return json({ ok: true });
   }
 
   if (request.method === "POST" && pathname === "/api/tasks/reorder") {
