@@ -102,3 +102,5 @@ pnpm run deploy
 ## HTTPS 与 PWA
 
 Cloudflare 的 `workers.dev` 地址和绑定后的 HTTPS 域名都能满足 iPhone/iPad Safari 的 Service Worker 与安装式 PWA 要求。不要再以 IP + HTTP 作为正式访问地址。
+
+## TODO：really user identity
