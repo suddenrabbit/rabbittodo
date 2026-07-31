@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260731.000520";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v29";
+const APP_VERSION = "v20260731.140125";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v30";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -41,6 +41,10 @@ const taskIdAliases = new Map();
 let persistentAvatar = null;
 let persistentProfileIcon = null;
 let persistentIdentitySymbol = null;
+let pointerDrag = null;
+let suppressCardClickUntil = 0;
+let dragAutoScrollFrame = 0;
+let dragAutoScrollSpeed = 0;
 const savedIdentity = localStorage.getItem("todo-identity") || "";
 
 const state = {
@@ -295,7 +299,7 @@ async function loadTasks({ quiet = false } = {}) {
 }
 
 function refreshActiveTasks(force = false) {
-  if (!state.identity || state.identityPromptOpen || state.editor || pendingMutations || document.visibilityState === "hidden") return;
+  if (!state.identity || state.identityPromptOpen || state.editor || pointerDrag || pendingMutations || document.visibilityState === "hidden") return;
   // pageshow、focus 与 visibilitychange 往往会连续触发；前台恢复只保留一次读取。
   const interval = force ? 1_500 : 30_000;
   if (Date.now() - lastTaskSyncAt > interval) loadTasks({ quiet: true });
@@ -314,8 +318,31 @@ function timestampValue(value) {
   return Date.parse(normalized) || 0;
 }
 
-function compareTodoTasks(left, right) {
+function hasManualPosition(task) {
+  return task.manual_position !== null
+    && task.manual_position !== undefined
+    && Number.isFinite(Number(task.manual_position));
+}
+
+function compareManualPosition(left, right) {
+  const leftManual = hasManualPosition(left);
+  const rightManual = hasManualPosition(right);
+  if (leftManual !== rightManual) return leftManual ? -1 : 1;
+  if (leftManual && rightManual) {
+    const manualOrder = Number(left.manual_position) - Number(right.manual_position);
+    if (manualOrder) return manualOrder;
+  }
+  return 0;
+}
+
+function comparePinnedAndManual(left, right) {
   if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
+  return compareManualPosition(left, right);
+}
+
+function compareTodoTasks(left, right) {
+  const pinnedAndManualOrder = comparePinnedAndManual(left, right);
+  if (pinnedAndManualOrder) return pinnedAndManualOrder;
   if (left.pinned && right.pinned) {
     const pinnedOrder = timestampValue(right.pinned_at) - timestampValue(left.pinned_at);
     if (pinnedOrder) return pinnedOrder;
@@ -334,6 +361,8 @@ function compareTodoTasks(left, right) {
 }
 
 function compareCompletedTasks(left, right) {
+  const manualOrder = compareManualPosition(left, right);
+  if (manualOrder) return manualOrder;
   const completedOrder = timestampValue(right.completed_at) - timestampValue(left.completed_at);
   if (completedOrder) return completedOrder;
   return Number(right.id) - Number(left.id);
@@ -341,6 +370,7 @@ function compareCompletedTasks(left, right) {
 
 function taskCard(task) {
   const overdue = isOverdue(task);
+  const showPinned = task.pinned && !task.completed;
   const status = task.status || "none";
   const statusBadge = !task.completed && status !== "none"
     ? `<span class="status-badge ${status}">${status === "in_progress" ? "进行中" : "暂停"}</span>`
@@ -348,13 +378,43 @@ function taskCard(task) {
   const distanceBadge = dueDistanceBadge(task);
   const completionDate = completedDate(task);
   const due = task.due_date ? `<span class="due"><i class="due-icon">◷</i><span class="due-label">${dateLabel(task.due_date)}</span></span>` : "";
-  return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : ""} ${overdue ? "is-overdue" : ""} ${task.pinned ? "is-pinned" : ""}" data-task-id="${task.id}">
+  return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : ""} ${overdue ? "is-overdue" : ""} ${showPinned ? "is-pinned" : ""}" data-task-id="${task.id}">
+    <button class="drag-handle" data-action="drag" data-id="${task.id}" aria-label="拖动调整顺序">⠿</button>
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
     <div class="task-body"><h3>${escapeHtml(task.title)}</h3><div class="task-meta">
       ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${completionDate}${distanceBadge}${statusBadge}${due}
       ${task.tags.map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}
-    </div></div><i class="task-color-dot ${task.pinned ? "is-star" : ""}" ${task.pinned ? 'aria-label="已置顶"' : ""}>${task.pinned ? "★" : ""}</i>
+    </div></div><i class="task-color-dot ${showPinned ? "is-star" : ""}" ${showPinned ? 'aria-label="已置顶"' : ""}>${showPinned ? "★" : ""}</i>
   </article>`;
+}
+
+function taskLists(tasks) {
+  const pageTasks = state.tasks.filter((task) => state.view === "done" ? task.completed : !task.completed);
+  const hasPinnedZone = state.view === "todo" && pageTasks.some((task) => task.pinned);
+  const emptyMessage = state.view === "done" ? "还没有已完成的事项。" : "这里还没有待办事项，点击 + 添加第一项吧。";
+  const regularTasks = state.view === "done" ? tasks : tasks.filter((task) => !task.pinned);
+  const regularTitle = state.view === "done" ? "已完成事项" : "待办事项";
+  const regularIcon = state.view === "done" ? "✓" : "☐";
+  const regularZone = (hasPinnedClass = "") => `<section class="regular-zone ${hasPinnedClass}">
+    <header class="task-zone-title regular-zone-title"><span><i>${regularIcon}</i>${regularTitle}</span><b>${regularTasks.length}</b></header>
+    <section class="task-list regular-task-list" data-task-zone="regular">${regularTasks.map((task) => taskCard(task)).join("") || `<p class="${hasPinnedZone ? "drop-hint" : "empty-state"}">${hasPinnedZone ? "拖到这里取消置顶" : emptyMessage}</p>`}</section>
+  </section>`;
+  if (!hasPinnedZone) {
+    const temporaryPinnedZone = state.view === "todo" && tasks.length
+      ? `<section class="pinned-zone is-empty-pinned-zone" data-pinned-zone aria-hidden="true">
+        <section class="task-list pinned-task-list" data-task-zone="pinned"></section>
+        <div class="temporary-pin-divider"><span>★ 置顶</span></div>
+      </section>`
+      : "";
+    return `${temporaryPinnedZone}${regularZone()}`;
+  }
+
+  const pinnedTasks = tasks.filter((task) => task.pinned);
+  return `<section class="pinned-zone" data-pinned-zone>
+    <header class="task-zone-title pinned-zone-title"><span><i>★</i>置顶事项</span><b>${pinnedTasks.length}</b></header>
+    <section class="task-list pinned-task-list" data-task-zone="pinned">${pinnedTasks.map((task) => taskCard(task)).join("") || '<p class="drop-hint">拖到这里置顶</p>'}</section>
+  </section>
+  ${regularZone("has-pinned-zone")}`;
 }
 
 function filters() {
@@ -380,7 +440,7 @@ function statusEditor(task) {
 }
 
 function pinEditor(task) {
-  return `<div class="composer-row pin-editor"><span><b>置顶任务</b><small>后置顶的任务排在更前面</small></span><button type="button" class="pin-toggle ${task.pinned ? "is-active" : ""}" data-action="toggle-pin" aria-pressed="${Boolean(task.pinned)}"><i>${task.pinned ? "★" : "☆"}</i>${task.pinned ? "已置顶" : "置顶"}</button></div>`;
+  return `<div class="composer-row pin-editor"><span><b>置顶任务</b><small>也可在列表中拖入或拖出置顶区</small></span><button type="button" class="pin-toggle ${task.pinned ? "is-active" : ""}" data-action="toggle-pin" aria-pressed="${Boolean(task.pinned)}"><i>${task.pinned ? "★" : "☆"}</i>${task.pinned ? "已置顶" : "置顶"}</button></div>`;
 }
 
 function editor() {
@@ -421,8 +481,7 @@ function render() {
   persistentProfileIcon = app.querySelector(".profile-icon") || persistentProfileIcon;
   persistentIdentitySymbol = app.querySelector(".identity-symbol") || persistentIdentitySymbol;
   const tasks = filteredTasks();
-  const emptyMessage = state.view === "done" ? "还没有已完成的事项。" : "这里还没有待办事项，点击 + 添加第一项吧。";
-  const taskContent = `<section class="task-list">${tasks.map((task) => taskCard(task)).join("") || `<p class="empty-state">${emptyMessage}</p>`}</section>`;
+  const taskContent = taskLists(tasks);
   const heading = { todo: "待办", done: "已办", profile: "我的" }[state.view];
   const overviewContent = `${pageHeader(heading)}${filters()}`;
   const pageContent = state.view === "profile"
@@ -446,7 +505,212 @@ function render() {
 function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "", pinned: false, pinned_at: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned) }; state.datePicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
 function commitTag() { const tag = state.tagInput.trim().replace(/^#/, ""); if (tag && !state.draftTags.includes(tag)) state.draftTags.push(tag); state.tagInput = ""; render(); document.querySelector("#tag-input")?.focus(); }
 
+function dragTargetList(pointerY) {
+  const pinnedList = app.querySelector('[data-task-zone="pinned"]');
+  const regularList = app.querySelector('[data-task-zone="regular"]');
+  if (!pinnedList) return regularList;
+  if (!regularList) return pinnedList;
+  const pinnedZone = pinnedList.closest(".pinned-zone");
+  const pinnedRect = pinnedZone.getBoundingClientRect();
+  const regularRect = regularList.getBoundingClientRect();
+  if (pinnedZone.classList.contains("is-empty-pinned-zone")) {
+    const dividerRect = pinnedZone.querySelector(".temporary-pin-divider").getBoundingClientRect();
+    return pointerY < dividerRect.top + dividerRect.height / 2 ? pinnedList : regularList;
+  }
+  const boundary = (pinnedRect.bottom + regularRect.top) / 2;
+  return pointerY < boundary ? pinnedList : regularList;
+}
+
+function animateTaskReflow(previousRects) {
+  app.querySelectorAll(".task-card:not(.is-drag-placeholder)").forEach((card) => {
+    const previous = previousRects.get(card);
+    if (!previous) return;
+    const next = card.getBoundingClientRect();
+    const deltaX = previous.left - next.left;
+    const deltaY = previous.top - next.top;
+    if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
+    card.animate(
+      [{ transform: `translate3d(${deltaX}px, ${deltaY}px, 0)` }, { transform: "translate3d(0, 0, 0)" }],
+      { duration: 180, easing: "cubic-bezier(.2,.8,.2,1)" },
+    );
+  });
+}
+
+function reorderDraggedCard(pointerY) {
+  if (!pointerDrag?.started) return;
+  const targetList = dragTargetList(pointerY);
+  if (!targetList) return;
+  const previousRects = new Map(
+    [...app.querySelectorAll(".task-card:not(.is-drag-placeholder)")].map((card) => [card, card.getBoundingClientRect()]),
+  );
+  const candidates = [...targetList.querySelectorAll(".task-card:not(.is-drag-placeholder)")];
+  const beforeCard = candidates.find((card) => pointerY < card.getBoundingClientRect().top + card.offsetHeight / 2);
+  if (beforeCard) targetList.insertBefore(pointerDrag.card, beforeCard);
+  else targetList.append(pointerDrag.card);
+  app.querySelectorAll("[data-task-zone]").forEach((list) => list.classList.toggle("is-drop-target", list === targetList));
+  animateTaskReflow(previousRects);
+}
+
+function updateDragGhost(pointerX, pointerY) {
+  if (!pointerDrag?.ghost) return;
+  pointerDrag.ghost.style.transform = `translate3d(${pointerX - pointerDrag.offsetX}px, ${pointerY - pointerDrag.offsetY}px, 0) rotate(.35deg) scale(1.015)`;
+}
+
+function autoScrollDuringDrag(pointerY) {
+  const scroller = app.querySelector(".content-scroll");
+  if (!scroller) return;
+  const rect = scroller.getBoundingClientRect();
+  const edge = Math.min(76, rect.height * .16);
+  dragAutoScrollSpeed = 0;
+  if (pointerY < rect.top + edge) dragAutoScrollSpeed = -Math.ceil((rect.top + edge - pointerY) / edge * 14);
+  else if (pointerY > rect.bottom - edge) dragAutoScrollSpeed = Math.ceil((pointerY - (rect.bottom - edge)) / edge * 14);
+  if (dragAutoScrollSpeed && !dragAutoScrollFrame) {
+    const scrollFrame = () => {
+      dragAutoScrollFrame = 0;
+      if (!pointerDrag?.started || !dragAutoScrollSpeed) return;
+      scroller.scrollTop += dragAutoScrollSpeed;
+      reorderDraggedCard(pointerDrag.lastY);
+      dragAutoScrollFrame = requestAnimationFrame(scrollFrame);
+    };
+    dragAutoScrollFrame = requestAnimationFrame(scrollFrame);
+  }
+}
+
+function startPointerDrag(event) {
+  if (!pointerDrag || pointerDrag.started) return;
+  const rect = pointerDrag.card.getBoundingClientRect();
+  const ghost = pointerDrag.card.cloneNode(true);
+  ghost.classList.add("task-drag-ghost");
+  ghost.removeAttribute("data-task-id");
+  ghost.style.width = `${rect.width}px`;
+  ghost.style.height = `${rect.height}px`;
+  document.body.append(ghost);
+  pointerDrag.started = true;
+  pointerDrag.ghost = ghost;
+  pointerDrag.lastY = event.clientY;
+  pointerDrag.offsetX = pointerDrag.startX - rect.left;
+  pointerDrag.offsetY = pointerDrag.startY - rect.top;
+  pointerDrag.card.classList.add("is-drag-placeholder");
+  document.body.classList.add("is-task-dragging");
+  app.querySelector(".workspace-tasks")?.classList.add("is-drag-active");
+  updateDragGhost(event.clientX, event.clientY);
+  reorderDraggedCard(event.clientY);
+}
+
+function pageTasksInDisplayOrder() {
+  const comparator = state.view === "done" ? compareCompletedTasks : compareTodoTasks;
+  return state.tasks
+    .filter((task) => state.view === "done" ? task.completed : !task.completed)
+    .slice()
+    .sort(comparator);
+}
+
+function visibleDragLayout() {
+  return {
+    pinned: [...app.querySelectorAll('[data-task-zone="pinned"] .task-card')].map((card) => Number(card.dataset.taskId)),
+    regular: [...app.querySelectorAll('[data-task-zone="regular"] .task-card')].map((card) => Number(card.dataset.taskId)),
+  };
+}
+
+function dragLayoutChanged(initial, current) {
+  if (!initial) return true;
+  return initial.pinned.join(",") !== current.pinned.join(",")
+    || initial.regular.join(",") !== current.regular.join(",");
+}
+
+function persistDraggedOrder() {
+  const { pinned: pinnedIds, regular: regularIds } = visibleDragLayout();
+  const visibleIds = [...pinnedIds, ...regularIds];
+  if (!visibleIds.length) return;
+
+  const baseline = pageTasksInDisplayOrder();
+  const visibleSet = new Set(visibleIds);
+  const tasksById = new Map(baseline.map((task) => [Number(task.id), task]));
+  let visibleIndex = 0;
+  const merged = baseline.map((task) => visibleSet.has(Number(task.id))
+    ? tasksById.get(visibleIds[visibleIndex++])
+    : task);
+  const pinnedSet = new Set(pinnedIds);
+  const now = new Date().toISOString();
+  merged.forEach((task, index) => {
+    if (state.view === "todo" && visibleSet.has(Number(task.id))) {
+      const shouldPin = pinnedSet.has(Number(task.id));
+      if (shouldPin && !task.pinned) task.pinned_at = now;
+      if (!shouldPin) task.pinned_at = null;
+      task.pinned = shouldPin;
+    }
+    task.manual_position = index + 1;
+  });
+
+  const payload = {
+    ids: merged.map((task) => resolvedTaskId(task.id)),
+    pinnedIds: merged.filter((task) => task.pinned).map((task) => resolvedTaskId(task.id)),
+    completed: state.view === "done",
+  };
+  render();
+  saveInBackground(() => api("/api/tasks/reorder", { method: "POST", body: JSON.stringify(payload) }));
+}
+
+function finishPointerDrag(cancelled = false) {
+  if (!pointerDrag) return;
+  const drag = pointerDrag;
+  const finalLayout = drag.started ? visibleDragLayout() : null;
+  const changed = drag.started && dragLayoutChanged(drag.initialLayout, finalLayout);
+  pointerDrag = null;
+  dragAutoScrollSpeed = 0;
+  if (dragAutoScrollFrame) cancelAnimationFrame(dragAutoScrollFrame);
+  dragAutoScrollFrame = 0;
+  if (drag.started) {
+    suppressCardClickUntil = Date.now() + 300;
+    drag.ghost?.remove();
+    drag.card.classList.remove("is-drag-placeholder");
+    document.body.classList.remove("is-task-dragging");
+    app.querySelector(".workspace-tasks")?.classList.remove("is-drag-active");
+    app.querySelectorAll("[data-task-zone]").forEach((list) => list.classList.remove("is-drop-target"));
+    if (cancelled) render();
+    else if (changed) persistDraggedOrder();
+  }
+}
+
+app.addEventListener("pointerdown", (event) => {
+  const handle = event.target.closest('[data-action="drag"]');
+  if (!handle || event.button !== 0 || pendingMutations || state.editor) return;
+  const card = handle.closest(".task-card");
+  if (!card || Number(card.dataset.taskId) < 0) return;
+  pointerDrag = {
+    pointerId: event.pointerId,
+    card,
+    handle,
+    startX: event.clientX,
+    startY: event.clientY,
+    initialLayout: visibleDragLayout(),
+    started: false,
+    ghost: null,
+  };
+  handle.setPointerCapture?.(event.pointerId);
+});
+
+window.addEventListener("pointermove", (event) => {
+  if (!pointerDrag || event.pointerId !== pointerDrag.pointerId) return;
+  const distance = Math.hypot(event.clientX - pointerDrag.startX, event.clientY - pointerDrag.startY);
+  if (!pointerDrag.started && distance < 4) return;
+  event.preventDefault();
+  startPointerDrag(event);
+  pointerDrag.lastY = event.clientY;
+  updateDragGhost(event.clientX, event.clientY);
+  autoScrollDuringDrag(event.clientY);
+  reorderDraggedCard(event.clientY);
+}, { passive: false });
+
+window.addEventListener("pointerup", (event) => {
+  if (pointerDrag && event.pointerId === pointerDrag.pointerId) finishPointerDrag(false);
+});
+window.addEventListener("pointercancel", (event) => {
+  if (pointerDrag && event.pointerId === pointerDrag.pointerId) finishPointerDrag(true);
+});
+
 app.addEventListener("click", async (event) => {
+  if (Date.now() < suppressCardClickUntil) return;
   const button = event.target.closest("[data-action]");
   if (button) {
     const action = button.dataset.action;
@@ -487,6 +751,7 @@ app.addEventListener("click", async (event) => {
       const completed = !task.completed;
       task.completed = completed;
       task.completed_at = completed ? new Date().toISOString() : null;
+      task.manual_position = null;
       if (completed) task.status = "none";
       render();
       saveInBackground(async () => {
@@ -558,7 +823,7 @@ app.addEventListener("submit", async (event) => {
         state.tasks.unshift({
           id: temporaryId, identity_code: state.identity, title, details, color: payload.color, tags,
           due_date: dueDate, completed: false, completed_at: null, status: payload.status, pinned: payload.pinned, pinned_at: pinnedAt,
-          created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+          manual_position: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });
         state.editor = null;
         state.view = "todo";

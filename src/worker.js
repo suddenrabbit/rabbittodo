@@ -133,16 +133,43 @@ async function api(request, env, url) {
     return json({ task: created }, 201);
   }
 
-  // Keep the endpoint temporarily for clients that have not refreshed yet.
-  // The current interface no longer exposes manual ordering and ignores position.
   if (request.method === "POST" && pathname === "/api/tasks/reorder") {
-    const { ids } = await bodyFrom(request);
+    const { ids, pinnedIds, completed } = await bodyFrom(request);
     if (!Array.isArray(ids)) return json({ error: "排序数据无效" }, 400);
+
+    const normalizedIds = ids.map(Number);
+    const hasPageOrder = typeof completed === "boolean" && Array.isArray(pinnedIds);
+    if (hasPageOrder) {
+      const { results: ownedRows } = await env.DB.prepare(
+        "SELECT id FROM tasks WHERE identity_code = ? AND completed = ?",
+      ).bind(identity, completed ? 1 : 0).all();
+      const owned = ownedRows.map((row) => Number(row.id));
+      const normalizedPinnedIds = pinnedIds.map(Number);
+      const uniqueIds = new Set(normalizedIds);
+      const uniquePinnedIds = new Set(normalizedPinnedIds);
+      if (
+        normalizedIds.length !== owned.length
+        || uniqueIds.size !== normalizedIds.length
+        || normalizedIds.some((taskId) => !owned.includes(taskId))
+        || uniquePinnedIds.size !== normalizedPinnedIds.length
+        || normalizedPinnedIds.some((taskId) => !uniqueIds.has(taskId))
+      ) {
+        return json({ error: "排序数据不完整" }, 400);
+      }
+      await env.DB.batch(normalizedIds.map((taskId, index) => {
+        const pinned = uniquePinnedIds.has(taskId) ? 1 : 0;
+        return env.DB.prepare(
+          "UPDATE tasks SET manual_position = ?, pinned = ?, pinned_at = CASE WHEN ? = 0 THEN NULL WHEN pinned = 0 OR pinned_at IS NULL THEN CURRENT_TIMESTAMP ELSE pinned_at END, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ? AND completed = ?",
+        ).bind(index + 1, pinned, pinned, taskId, identity, completed ? 1 : 0);
+      }));
+      return json({ ok: true });
+    }
+
+    // Keep compatibility with clients that still send the legacy whole-list order.
     const { results: ownedRows } = await env.DB.prepare(
       "SELECT id FROM tasks WHERE identity_code = ?",
     ).bind(identity).all();
     const owned = ownedRows.map((row) => Number(row.id));
-    const normalizedIds = ids.map(Number);
     if (normalizedIds.length !== owned.length || normalizedIds.some((id) => !owned.includes(id))) {
       return json({ error: "排序数据不完整" }, 400);
     }
@@ -167,7 +194,7 @@ async function api(request, env, url) {
     let result;
     if (typeof completed === "boolean") {
       result = await env.DB.prepare(
-        "UPDATE tasks SET completed = ?, completed_at = ?, status = CASE WHEN ? THEN 'none' ELSE status END, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?",
+        "UPDATE tasks SET completed = ?, completed_at = ?, status = CASE WHEN ? THEN 'none' ELSE status END, manual_position = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?",
       ).bind(completed ? 1 : 0, completed ? new Date().toISOString() : null, completed ? 1 : 0, id, identity).run();
     } else if (STATUSES.has(status)) {
       result = await env.DB.prepare(
