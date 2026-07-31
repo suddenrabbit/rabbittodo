@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260731.201737";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v33";
+const APP_VERSION = "v20260731.204635";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v34";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -29,6 +29,7 @@ let serviceWorkerRegistration = null;
 let serviceWorkerUpdatePromise = null;
 let serviceWorkerReloadPending = false;
 let serviceWorkerVersionProbeScheduled = false;
+let foregroundSyncPromise = null;
 const preventPageZoom = (event) => {
   if (event.type.startsWith("gesture") || event.touches?.length > 1) event.preventDefault();
 };
@@ -93,25 +94,55 @@ function watchServiceWorkerInstallation(registration) {
   });
 }
 
-function checkForServiceWorkerUpdate() {
-  if (!serviceWorkerRegistration || document.visibilityState === "hidden" || !navigator.onLine) return;
+function waitForServiceWorkerActivation(registration) {
+  const worker = registration.installing || registration.waiting;
+  if (!worker || worker.state === "activated" || worker.state === "redundant") return Promise.resolve();
+  return Promise.race([
+    new Promise((resolve) => worker.addEventListener("statechange", () => {
+      if (worker.state === "activated" || worker.state === "redundant") resolve();
+    })),
+    new Promise((resolve) => setTimeout(resolve, 3_000)),
+  ]);
+}
+
+function checkForServiceWorkerUpdate({ force = false } = {}) {
+  if (!serviceWorkerRegistration || document.visibilityState === "hidden" || !navigator.onLine) return Promise.resolve();
   const now = Date.now();
   const lastCheck = Number(sessionStorage.getItem(SERVICE_WORKER_CHECK_KEY) || 0);
-  if (serviceWorkerUpdatePromise || now - lastCheck < SERVICE_WORKER_CHECK_INTERVAL) {
+  if (serviceWorkerUpdatePromise) return serviceWorkerUpdatePromise;
+  if (!force && now - lastCheck < SERVICE_WORKER_CHECK_INTERVAL) {
     probeServiceWorkerVersion();
-    return;
+    return Promise.resolve();
   }
   sessionStorage.setItem(SERVICE_WORKER_CHECK_KEY, String(now));
   serviceWorkerUpdatePromise = serviceWorkerRegistration.update()
-    .then(() => probeServiceWorkerVersion())
+    .then(async (registration) => {
+      await waitForServiceWorkerActivation(registration);
+      probeServiceWorkerVersion();
+    })
     .catch(() => scheduleServiceWorkerRetry())
     .finally(() => { serviceWorkerUpdatePromise = null; });
+  return serviceWorkerUpdatePromise;
 }
 
 function reloadForServiceWorkerUpdate() {
   if (!serviceWorkerReloadPending || isReloadingForServiceWorker || !state.identity || state.identityPromptOpen || state.editor || pendingMutations) return;
   isReloadingForServiceWorker = true;
   window.location.reload();
+}
+
+function synchronizeForeground() {
+  // 首次加载要等 register() 完成；否则 pageshow 会抢先同步数据。
+  if ("serviceWorker" in navigator && !serviceWorkerRegistration) return Promise.resolve();
+  if (foregroundSyncPromise) return foregroundSyncPromise;
+  foregroundSyncPromise = (async () => {
+    await checkForServiceWorkerUpdate({ force: true });
+    // 给新 Service Worker 的版本消息和 controllerchange 留出一个事件循环窗口。
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    reloadForServiceWorkerUpdate();
+    if (!serviceWorkerReloadPending && !isReloadingForServiceWorker) await loadTasks({ quiet: true });
+  })().finally(() => { foregroundSyncPromise = null; });
+  return foregroundSyncPromise;
 }
 
 function dateInShanghai(value = new Date()) {
@@ -344,8 +375,10 @@ async function verifyIdentity(code) {
   state.identityPromptOpen = false;
   state.tasks = [];
   state.view = "todo";
-  await loadTasks();
   reloadForServiceWorkerUpdate();
+  if (serviceWorkerReloadPending || isReloadingForServiceWorker) return;
+  if (serviceWorkerRegistration) await synchronizeForeground();
+  else await loadTasks();
 }
 
 // Keep the interface responsive while preserving the order of database writes.
@@ -415,7 +448,7 @@ async function loadTasks({ quiet = false } = {}) {
 }
 
 function refreshActiveTasks(force = false) {
-  if (!state.identity || state.identityPromptOpen || state.editor || pointerDrag || pendingMutations || document.visibilityState === "hidden") return;
+  if (!state.identity || state.identityPromptOpen || state.editor || pointerDrag || pendingMutations || serviceWorkerUpdatePromise || foregroundSyncPromise || serviceWorkerReloadPending || document.visibilityState === "hidden") return;
   // pageshow、focus 与 visibilitychange 往往会连续触发；前台恢复只保留一次读取。
   const interval = force ? 1_500 : 30_000;
   if (Date.now() - lastTaskSyncAt > interval) loadTasks({ quiet: true });
@@ -603,9 +636,9 @@ function render() {
   const overviewContent = `${pageHeader(heading)}${filters()}`;
   const pageContent = state.view === "profile"
     ? profilePage()
-    : `<section class="workspace workspace-${state.view}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}</main></section>`;
+    : `<section class="workspace workspace-${state.view}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}<p class="task-encryption-note"><i>🔒</i>任务内容已加密存储</p></main></section>`;
   app.innerHTML = `<section class="phone"><div class="content-scroll">${pageContent}</div>
-    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button><p class="encryption-note"><i>🔒</i>任务内容已加密存储</p></nav></section>${editor()}${datePicker()}${identityGate()}`;
+    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
     persistentAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
@@ -972,18 +1005,13 @@ app.addEventListener("submit", async (event) => {
 // Installed PWAs are often resumed from a frozen page instead of reloaded.
 // Refresh on every foreground return and poll gently while the app stays open.
 window.addEventListener("pageshow", () => {
-  refreshActiveTasks(true);
-  checkForServiceWorkerUpdate();
+  synchronizeForeground();
 });
 window.addEventListener("focus", () => {
-  refreshActiveTasks(true);
-  checkForServiceWorkerUpdate();
+  synchronizeForeground();
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") {
-    refreshActiveTasks(true);
-    checkForServiceWorkerUpdate();
-  }
+  if (document.visibilityState === "visible") synchronizeForeground();
 });
 setInterval(() => refreshActiveTasks(), 30_000);
 
@@ -997,9 +1025,10 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).then((registration) => {
     serviceWorkerRegistration = registration;
     watchServiceWorkerInstallation(registration);
-    checkForServiceWorkerUpdate();
-    probeServiceWorkerVersion();
-  }).catch(() => undefined);
+    synchronizeForeground();
+  }).catch(() => loadTasks({ quiet: true }));
+} else {
+  loadTasks({ quiet: true });
 }
-// 首次进入与 Service Worker 切换期间的同步均为后台行为，不弹出瞬时网络中断提示。
-loadTasks({ quiet: true });
+// 身份码输入界面不依赖网络或 Service Worker，优先展示并保持输入过程稳定。
+if (!state.identity) render();
