@@ -4,14 +4,15 @@ const USERNAME_PATTERN = /^[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_]{1,9}
 const ENCRYPTION_PREFIX = "rtenc:v1:";
 const ENCRYPTED_VALUE_PATTERN = /^rtenc:v1:[A-Za-z0-9+/]+={0,2}$/;
 const INTERNAL_IDENTITY_PATTERN = /^u_[A-Za-z0-9_-]{43}$/;
-const PASSWORD_ITERATIONS = 210_000;
+// Cloudflare Workers rejects PBKDF2 iteration counts above 100,000.
+const PASSWORD_ITERATIONS = 100_000;
 const PASSWORD_VERSION = "pbkdf2-sha256-v1";
 const SESSION_DAYS = 30;
 const RESET_MINUTES = 15;
 // Keep the final upgrade invocation within D1 Free's 50-query limit.
 const MAX_UPGRADE_TASKS = 40;
 const DEFAULT_ADMIN_SALT = "RabbitToDo admin fallback v1";
-const DEFAULT_ADMIN_HASH = "HG4xZtIsF6fVSt7cDhso9PvCsMlomht3m6Knv1WIerU=";
+const DEFAULT_ADMIN_HASH = "CKOSDMM91UVxeB5EUIv4UPUGwJpZlYnKi5CPg4dkQjc=";
 const authFailures = new Map();
 
 const encoder = new TextEncoder();
@@ -57,7 +58,7 @@ async function taskById(db, id, identity) { return taskFromRow(await db.prepare(
 async function issueSession(db, identityCode) { const token = randomB64(32); await db.prepare("INSERT INTO sessions (token_hash, identity_code, expires_at) VALUES (?, ?, ?)").bind(await sha256(token), identityCode, expiry()).run(); return token; }
 async function accountFromSession(request, db) { const token = cookieValue(request, "rabbittodo_session"); if (!token) return null; const row = await db.prepare("SELECT identities.* FROM sessions JOIN identities ON identities.code = sessions.identity_code WHERE sessions.token_hash = ? AND datetime(sessions.expires_at) > CURRENT_TIMESTAMP").bind(await sha256(token)).first(); return row?.status === "enabled" && row.username ? row : null; }
 async function revokeSessions(db, code) { await db.prepare("DELETE FROM sessions WHERE identity_code = ?").bind(code).run(); }
-async function adminAuthorized(request, env) { const supplied = String(request.headers.get("X-Admin-Password") || ""); if (!supplied) return false; if (env.ADMIN_PASSWORD) return timingSafeEqual(supplied, String(env.ADMIN_PASSWORD)); const hash = b64(await pbkdf2(supplied, DEFAULT_ADMIN_SALT, 120000)); return timingSafeEqual(hash, DEFAULT_ADMIN_HASH); }
+async function adminAuthorized(request, env) { const supplied = String(request.headers.get("X-Admin-Password") || ""); if (!supplied) return false; if (env.ADMIN_PASSWORD) return timingSafeEqual(supplied, String(env.ADMIN_PASSWORD)); const hash = b64(await pbkdf2(supplied, DEFAULT_ADMIN_SALT)); return timingSafeEqual(hash, DEFAULT_ADMIN_HASH); }
 
 async function authApi(request, env, url) {
   const db = env.DB; const { pathname } = url;
