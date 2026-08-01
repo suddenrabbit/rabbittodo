@@ -7,7 +7,7 @@ const INTERNAL_IDENTITY_PATTERN = /^u_[A-Za-z0-9_-]{43}$/;
 // Cloudflare Workers rejects PBKDF2 iteration counts above 100,000.
 const PASSWORD_ITERATIONS = 100_000;
 const PASSWORD_VERSION = "pbkdf2-sha256-v1";
-const SESSION_DAYS = 30;
+const SESSION_DAYS = 180;
 const RESET_MINUTES = 15;
 // Keep the final upgrade invocation within D1 Free's 50-query limit.
 const MAX_UPGRADE_TASKS = 40;
@@ -62,7 +62,15 @@ async function adminAuthorized(request, env) { const supplied = String(request.h
 
 async function authApi(request, env, url) {
   const db = env.DB; const { pathname } = url;
-  if (request.method === "GET" && pathname === "/api/auth/session") { const account = await accountFromSession(request, db); return account ? json({ account: publicAccount(account, false) }) : json({ error: "请登录" }, 401); }
+  if (request.method === "GET" && pathname === "/api/auth/session") {
+    const account = await accountFromSession(request, db);
+    if (!account) return json({ error: "请登录" }, 401);
+    const token = cookieValue(request, "rabbittodo_session");
+    // A foreground launch refreshes the same device session without invalidating other devices.
+    await db.prepare("UPDATE sessions SET expires_at = ? WHERE token_hash = ?").bind(expiry(), await sha256(token)).run();
+    return json({ account: publicAccount(account) }, 200, { "Set-Cookie": sessionCookie(token, request) });
+  }
+  if (pathname === "/api/auth/upgrade/prepare" || pathname === "/api/auth/upgrade") return json({ error: "旧身份码升级入口已关闭，请使用用户名和密码登录" }, 410);
   if (request.method === "POST" && pathname === "/api/auth/register") {
     const { username, password } = await bodyFrom(request); const display = String(username || "").normalize("NFKC").trim(); const normalized = normalizeUsername(display);
     if (!validUsername(display)) return json({ error: "用户名为 2-10 个字符，须以中文或英文开头" }, 400);
@@ -157,7 +165,24 @@ async function adminApi(request, env, pathname) {
 async function taskApi(request, env, url, account) {
   const db = env.DB, identity = account.code, { pathname } = url;
   if (request.method === "GET" && pathname === "/api/tasks") { const { results } = await db.prepare("SELECT * FROM tasks WHERE identity_code = ? ORDER BY id DESC").bind(identity).all(); return json({ tasks: results.map(taskFromRow) }); }
-  if (request.method === "POST" && pathname === "/api/tasks") { const task = sanitizeTask(await bodyFrom(request)); const result = await db.prepare("INSERT INTO tasks (identity_code, title, color, tags, details, status, due_date, pinned, pinned_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END)").bind(identity, task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, task.pinned ? 1 : 0, task.pinned ? 1 : 0).run(); return json({ task: await taskById(db, Number(result.meta.last_row_id), identity) }, 201); }
+  if (request.method === "POST" && pathname === "/api/tasks") {
+    const task = sanitizeTask(await bodyFrom(request));
+    const mutationId = String(request.headers.get("X-RabbitTodo-Mutation") || "");
+    if (mutationId && !/^[A-Za-z0-9_-]{16,128}$/.test(mutationId)) return json({ error: "同步操作编号无效" }, 400);
+    if (mutationId) {
+      const existing = await db.prepare("SELECT * FROM tasks WHERE identity_code = ? AND client_mutation_id = ?").bind(identity, mutationId).first();
+      if (existing) return json({ task: taskFromRow(existing), replayed: true });
+    }
+    try {
+      const result = await db.prepare("INSERT INTO tasks (identity_code, title, color, tags, details, status, due_date, pinned, pinned_at, client_mutation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, ?)").bind(identity, task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, task.pinned ? 1 : 0, task.pinned ? 1 : 0, mutationId || null).run();
+      return json({ task: await taskById(db, Number(result.meta.last_row_id), identity) }, 201);
+    } catch (error) {
+      if (!mutationId || !String(error).includes("tasks.identity_code, tasks.client_mutation_id")) throw error;
+      const existing = await db.prepare("SELECT * FROM tasks WHERE identity_code = ? AND client_mutation_id = ?").bind(identity, mutationId).first();
+      if (!existing) throw error;
+      return json({ task: taskFromRow(existing), replayed: true });
+    }
+  }
   if (request.method === "POST" && pathname === "/api/tasks/encrypt") {
     const { tasks } = await bodyFrom(request);
     if (!Array.isArray(tasks) || !tasks.length || tasks.length > 50) return json({ error: "任务密文数据无效" }, 400);
@@ -187,7 +212,7 @@ async function taskApi(request, env, url, account) {
   const id = taskIdFrom(pathname); if (!id) return json({ error: "未找到接口" }, 404);
   if (request.method === "PUT") { const task = sanitizeTask(await bodyFrom(request)); const result = await db.prepare("UPDATE tasks SET title = ?, color = ?, tags = ?, details = ?, status = ?, due_date = ?, pinned = ?, pinned_at = CASE WHEN ? = 0 THEN NULL WHEN pinned_at IS NULL THEN CURRENT_TIMESTAMP ELSE pinned_at END, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?").bind(task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, task.pinned ? 1 : 0, task.pinned ? 1 : 0, id, identity).run(); return result.meta.changes ? json({ task: await taskById(db, id, identity) }) : json({ error: "事项不存在" }, 404); }
   if (request.method === "PATCH") { const { completed, status } = await bodyFrom(request); let result; if (typeof completed === "boolean") result = await db.prepare("UPDATE tasks SET completed = ?, completed_at = ?, status = CASE WHEN ? THEN 'none' ELSE status END, manual_position = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?").bind(completed ? 1 : 0, completed ? new Date().toISOString() : null, completed ? 1 : 0, id, identity).run(); else if (STATUSES.has(status)) result = await db.prepare("UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?").bind(status, id, identity).run(); else return json({ error: "任务状态无效" }, 400); return result.meta.changes ? json({ task: await taskById(db, id, identity) }) : json({ error: "事项不存在" }, 404); }
-  if (request.method === "DELETE") { const result = await db.prepare("DELETE FROM tasks WHERE id = ? AND identity_code = ?").bind(id, identity).run(); return result.meta.changes ? json({ ok: true }) : json({ error: "事项不存在" }, 404); }
+  if (request.method === "DELETE") { await db.prepare("DELETE FROM tasks WHERE id = ? AND identity_code = ?").bind(id, identity).run(); return json({ ok: true }); }
   return json({ error: "未找到接口" }, 404);
 }
 

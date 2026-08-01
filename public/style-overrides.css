@@ -5,6 +5,11 @@
 .identity-card > span + input { margin-top: 24px; }
 #auth-identity { text-align: center; letter-spacing: 5px; }
 .identity-card .auth-error { margin: 12px 0 -6px; border-radius: 10px; background: #fff0f1; color: #b54752; padding: 9px 11px; text-align: left; font-size: 12px; line-height: 1.45; }
+.update-gate { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; background: rgba(31, 31, 38, .28); backdrop-filter: blur(5px); }
+.update-card { width: min(100%, 340px); display: grid; justify-items: center; gap: 14px; padding: 28px 24px 22px; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(20, 18, 35, .22); text-align: center; }
+.update-card h2 { margin: 2px 0 0; font-size: 20px; }
+.update-card > span { color: #696a76; font-size: 13px; line-height: 1.65; }
+.update-card .save-button { width: 100%; margin-top: 4px; }
 .username-display { font-size: 23px !important; letter-spacing: .5px !important; overflow-wrap: anywhere; }
 .profile-card > span { display: block; max-width: 290px; margin: 0 auto; }
 .account-form { display: grid; gap: 8px; margin-top: 18px; text-align: left; }

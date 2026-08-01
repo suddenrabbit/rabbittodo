@@ -1,4 +1,4 @@
-const CACHE = "rabbittodo-v43";
+const CACHE = "rabbittodo-v45";
 const ASSETS = ["/", "/index.html", "/style.css", "/style-overrides.css", "/app.js", "/manifest.webmanifest", "/rabbittodo-icon.png", "/rabbittodo-icon-dock-v4.png"];
 
 async function cacheLatestAssets() {
@@ -16,19 +16,20 @@ async function announceVersion() {
   clients.forEach((client) => client.postMessage({ type: "RABBITTODO_SW_VERSION", version: CACHE }));
 }
 
-self.addEventListener("install", (event) => event.waitUntil(cacheLatestAssets().then(() => self.skipWaiting())));
+self.addEventListener("install", (event) => event.waitUntil(cacheLatestAssets()));
 self.addEventListener("activate", (event) => event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim()).then(() => announceVersion())));
 self.addEventListener("message", (event) => {
   if (event.data?.type === "RABBITTODO_GET_VERSION") event.source?.postMessage({ type: "RABBITTODO_SW_VERSION", version: CACHE });
+  if (event.data?.type === "RABBITTODO_APPLY_UPDATE") self.skipWaiting();
 });
 self.addEventListener("fetch", (event) => {
+  if (event.request.method !== "GET") return;
   const pathname = new URL(event.request.url).pathname;
   if (pathname.startsWith("/api/") || pathname.startsWith("/console/")) return;
-  event.respondWith(fetch(event.request).then((response) => {
-    if (response.ok) {
-      const copy = response.clone();
-      caches.open(CACHE).then((cache) => cache.put(event.request, copy));
-    }
-    return response;
-  }).catch(() => caches.match(event.request)));
+  event.respondWith(caches.open(CACHE).then(async (cache) => {
+    const cached = await cache.match(event.request);
+    if (cached) return cached;
+    try { return await fetch(event.request); }
+    catch { return cache.match("/"); }
+  }));
 });

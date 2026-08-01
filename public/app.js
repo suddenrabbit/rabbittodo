@@ -1,10 +1,13 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260801.110605";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v43";
+const APP_VERSION = "v20260801.205504";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v45";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
+const LOCAL_STORE_NAME = "rabbittodo-local-v1";
+const LOCAL_STORE_KEY = "active-account";
+const SYNC_RETRY_DELAYS = [5_000, 30_000, 120_000, 600_000];
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const ENCRYPTION_PREFIX = "rtenc:v1:";
 const ENCRYPTION_SALT = "RabbitToDo task content v1";
@@ -28,9 +31,14 @@ const updateViewportClasses = () => {
 let isReloadingForServiceWorker = false;
 let serviceWorkerRegistration = null;
 let serviceWorkerUpdatePromise = null;
-let serviceWorkerReloadPending = false;
 let serviceWorkerVersionProbeScheduled = false;
 let foregroundSyncPromise = null;
+let lastSessionLeaseAt = 0;
+let localStorePromise = null;
+let localProfile = null;
+let outboxSyncPromise = null;
+let outboxRetryTimer = 0;
+let outboxRetryAttempt = 0;
 const preventPageZoom = (event) => {
   if (event.type.startsWith("gesture") || event.touches?.length > 1) event.preventDefault();
 };
@@ -52,25 +60,107 @@ let dragAutoScrollFrame = 0;
 let dragAutoScrollSpeed = 0;
 let encryptionKeyIdentity = "";
 let encryptionKeyPromise = null;
-const savedIdentity = localStorage.getItem("todo-identity") || "";
+localStorage.removeItem("todo-identity");
 
 const state = {
-  identity: "", username: "", encryptionSeed: "", authMode: savedIdentity ? "upgrade" : "login", authPromptOpen: true, authSubmitting: false, authDirty: false,
-  authError: "", authUsername: "", authPassword: "", authConfirm: "", authResetCode: "", identityDraft: savedIdentity,
+  identity: "", username: "", encryptionSeed: "", authMode: "login", authPromptOpen: true, authSubmitting: false, authDirty: false,
+  authError: "", authUsername: "", authPassword: "", authConfirm: "", authResetCode: "", identityDraft: "",
   passwordDialog: false, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
+  updateReady: false, updateApplying: false,
 };
 
 updateViewportClasses();
 window.addEventListener("resize", updateViewportClasses);
+
+function openLocalStore() {
+  if (localStorePromise) return localStorePromise;
+  localStorePromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(LOCAL_STORE_NAME, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("state");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("本地数据不可用"));
+  });
+  return localStorePromise;
+}
+
+async function localRead() {
+  const db = await openLocalStore();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction("state", "readonly").objectStore("state").get(LOCAL_STORE_KEY);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error("读取本地数据失败"));
+  });
+}
+
+async function localWrite(value) {
+  const db = await openLocalStore();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction("state", "readwrite").objectStore("state").put(value, LOCAL_STORE_KEY);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error || new Error("保存本地数据失败"));
+  });
+}
+
+async function localClear() {
+  const db = await openLocalStore();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction("state", "readwrite").objectStore("state").delete(LOCAL_STORE_KEY);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error || new Error("清除本地数据失败"));
+  });
+}
+
+function currentLocalSnapshot() {
+  return {
+    username: state.username,
+    encryptionSeed: state.encryptionSeed,
+    tasks: state.tasks,
+    outbox: localProfile?.outbox || [],
+    aliases: [...taskIdAliases.entries()],
+    nextTemporaryTaskId,
+    savedAt: Date.now(),
+  };
+}
+
+async function persistLocalSnapshot() {
+  if (!state.username || !state.encryptionSeed) return;
+  localProfile = currentLocalSnapshot();
+  await localWrite(localProfile);
+}
+
+async function restoreLocalSnapshot() {
+  try {
+    const profile = await localRead();
+    if (!profile?.username || !/^u_[A-Za-z0-9_-]{43}$/.test(String(profile.encryptionSeed || ""))) return false;
+    localProfile = profile;
+    state.identity = "authenticated";
+    state.username = profile.username;
+    state.encryptionSeed = profile.encryptionSeed;
+    state.authUsername = profile.username;
+    state.authPromptOpen = false;
+    state.tasks = Array.isArray(profile.tasks) ? profile.tasks : [];
+    nextTemporaryTaskId = Number(profile.nextTemporaryTaskId) || -1;
+    taskIdAliases.clear();
+    (Array.isArray(profile.aliases) ? profile.aliases : []).forEach(([from, to]) => taskIdAliases.set(Number(from), Number(to)));
+    encryptionKeyIdentity = "";
+    encryptionKeyPromise = null;
+    render();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function serviceWorkerVersionNumber(value) {
   return Number(String(value || "").match(/^rabbittodo-v(\d+)$/)?.[1] || 0);
 }
 
 function handleServiceWorkerVersion(version) {
-  if (serviceWorkerVersionNumber(version) <= serviceWorkerVersionNumber(EXPECTED_SERVICE_WORKER_VERSION)) return;
-  serviceWorkerReloadPending = true;
-  reloadForServiceWorkerUpdate();
+  if (serviceWorkerVersionNumber(version) < serviceWorkerVersionNumber(EXPECTED_SERVICE_WORKER_VERSION)) return;
+  if (serviceWorkerRegistration?.waiting) {
+    state.updateReady = true;
+    render();
+  }
 }
 
 function probeServiceWorkerVersion() {
@@ -92,19 +182,12 @@ function watchServiceWorkerInstallation(registration) {
     const installingWorker = registration.installing;
     installingWorker?.addEventListener("statechange", () => {
       if (installingWorker.state === "redundant") scheduleServiceWorkerRetry();
+      if (installingWorker.state === "installed" && navigator.serviceWorker.controller) {
+        state.updateReady = true;
+        render();
+      }
     });
   });
-}
-
-function waitForServiceWorkerActivation(registration) {
-  const worker = registration.installing || registration.waiting;
-  if (!worker || worker.state === "activated" || worker.state === "redundant") return Promise.resolve();
-  return Promise.race([
-    new Promise((resolve) => worker.addEventListener("statechange", () => {
-      if (worker.state === "activated" || worker.state === "redundant") resolve();
-    })),
-    new Promise((resolve) => setTimeout(resolve, 3_000)),
-  ]);
 }
 
 function checkForServiceWorkerUpdate({ force = false } = {}) {
@@ -118,8 +201,11 @@ function checkForServiceWorkerUpdate({ force = false } = {}) {
   }
   sessionStorage.setItem(SERVICE_WORKER_CHECK_KEY, String(now));
   serviceWorkerUpdatePromise = serviceWorkerRegistration.update()
-    .then(async (registration) => {
-      await waitForServiceWorkerActivation(registration);
+    .then((registration) => {
+      if (registration.waiting) {
+        state.updateReady = true;
+        render();
+      }
       probeServiceWorkerVersion();
     })
     .catch(() => scheduleServiceWorkerRetry())
@@ -127,8 +213,16 @@ function checkForServiceWorkerUpdate({ force = false } = {}) {
   return serviceWorkerUpdatePromise;
 }
 
+async function applyServiceWorkerUpdate() {
+  if (!state.updateReady || state.updateApplying || !serviceWorkerRegistration?.waiting) return;
+  state.updateApplying = true;
+  render();
+  try { await persistLocalSnapshot(); } catch {}
+  serviceWorkerRegistration.waiting.postMessage({ type: "RABBITTODO_APPLY_UPDATE" });
+}
+
 function reloadForServiceWorkerUpdate() {
-  if (!serviceWorkerReloadPending || isReloadingForServiceWorker || (state.authPromptOpen && state.authDirty) || state.authSubmitting || state.editor || pendingMutations) return;
+  if (!state.updateApplying || isReloadingForServiceWorker) return;
   isReloadingForServiceWorker = true;
   window.location.reload();
 }
@@ -138,13 +232,26 @@ function synchronizeForeground() {
   if ("serviceWorker" in navigator && !serviceWorkerRegistration) return Promise.resolve();
   if (foregroundSyncPromise) return foregroundSyncPromise;
   foregroundSyncPromise = (async () => {
+    // Update checks must happen before remote sync, but never delay local rendering.
     await checkForServiceWorkerUpdate({ force: true });
-    // 给新 Service Worker 的版本消息和 controllerchange 留出一个事件循环窗口。
-    await new Promise((resolve) => setTimeout(resolve, 180));
-    reloadForServiceWorkerUpdate();
-    if (!serviceWorkerReloadPending && !isReloadingForServiceWorker) await loadTasks({ quiet: true });
+    if (!state.updateReady && !state.updateApplying && await refreshSessionLease()) await flushOutboxAndLoad();
   })().finally(() => { foregroundSyncPromise = null; });
   return foregroundSyncPromise;
+}
+
+async function refreshSessionLease() {
+  if (!state.identity || Date.now() - lastSessionLeaseAt < 7 * 86400_000) return true;
+  try {
+    const response = await api("/api/auth/session");
+    if (!response.account?.encryptionSeed || response.account.username !== state.username) throw new Error("会话不匹配");
+    state.encryptionSeed = response.account.encryptionSeed;
+    lastSessionLeaseAt = Date.now();
+    await persistLocalSnapshot();
+    return true;
+  } catch (error) {
+    handleAuthenticationError(error);
+    return false;
+  }
 }
 
 function dateInShanghai(value = new Date()) {
@@ -317,6 +424,7 @@ async function api(path, options = {}) {
 async function enterAccount(account) {
   const seed = String(account.encryptionSeed || "");
   if (!/^u_[A-Za-z0-9_-]{43}$/.test(seed)) throw new Error("账号身份信息无效，请重新登录");
+  const keepOfflineData = localProfile?.username === account.username && localProfile?.encryptionSeed === seed;
   state.identity = "authenticated";
   state.username = account.username;
   state.encryptionSeed = seed;
@@ -330,26 +438,15 @@ async function enterAccount(account) {
   state.authPassword = "";
   state.authConfirm = "";
   state.authResetCode = "";
-  state.tasks = [];
+  state.tasks = keepOfflineData && Array.isArray(localProfile?.tasks) ? localProfile.tasks : [];
   state.view = "todo";
-  localStorage.removeItem("todo-identity");
-  sessionStorage.setItem("rabbittodo-session-seed", seed);
-  sessionStorage.setItem("rabbittodo-session-username", account.username);
-  if (serviceWorkerRegistration) await synchronizeForeground(); else await loadTasks();
-}
-
-async function prepareLegacyUpgrade(identityCode, username) {
-  const prepared = await api("/api/auth/upgrade/prepare", { method: "POST", decrypt: false, body: JSON.stringify({ identityCode, username }) });
-  const newIdentityCode = String(prepared.newIdentityCode || "");
-  if (!/^u_[A-Za-z0-9_-]{43}$/.test(newIdentityCode)) throw new Error("暂时无法生成新账号，请重试");
-  const plaintextTasks = await Promise.all(prepared.tasks.map((task) => decryptTaskContent(task, identityCode)));
-  const migratedTasks = await Promise.all(plaintextTasks.map(async (task) => {
-    const encrypted = await encryptTaskContent(task, newIdentityCode);
-    const verified = await decryptTaskContent(encrypted, newIdentityCode);
-    if (verified.title !== task.title || verified.details !== task.details) throw new Error("待办重新加密校验失败，请重试");
-    return { id: task.id, title: encrypted.title, details: encrypted.details, updatedAt: task.updated_at };
-  }));
-  return { newIdentityCode, tasks: migratedTasks };
+  if (!keepOfflineData) {
+    taskIdAliases.clear();
+    nextTemporaryTaskId = -1;
+  }
+  localProfile = { ...currentLocalSnapshot(), outbox: keepOfflineData ? (localProfile?.outbox || []) : [] };
+  await persistLocalSnapshot();
+  if (serviceWorkerRegistration) await synchronizeForeground(); else await flushOutboxAndLoad();
 }
 
 function openAuth(mode = "login") {
@@ -367,7 +464,7 @@ function openAuth(mode = "login") {
 }
 
 function authSubmitLabel(mode = state.authMode) {
-  return mode === "upgrade" ? "保存并继续" : mode === "register" ? "创建账号" : mode === "reset" ? "设置新密码" : "登录";
+  return mode === "register" ? "创建账号" : mode === "reset" ? "设置新密码" : "登录";
 }
 
 function setAuthSubmitting(submitting) {
@@ -419,7 +516,7 @@ function continueAsRegistration() {
   confirmInput.placeholder = "再次输入密码";
   confirmInput.required = true;
   passwordInput.after(confirmInput);
-  panel.querySelector(".auth-links").innerHTML = '<button type="button" data-action="auth-login">返回登录</button><button type="button" data-action="auth-upgrade">使用原有身份码</button>';
+  panel.querySelector(".auth-links").innerHTML = '<button type="button" data-action="auth-login">返回登录</button>';
   showAuthError("这是一个新用户名，请再次输入密码完成注册", "#auth-confirm");
 }
 
@@ -430,12 +527,10 @@ async function submitAuthentication() {
   const password = document.querySelector("#auth-password").value;
   const confirmPassword = document.querySelector("#auth-confirm")?.value || "";
   const resetCode = document.querySelector("#auth-reset-code")?.value || "";
-  const legacyIdentityCode = document.querySelector("#auth-identity")?.value || "";
   state.authUsername = username;
   state.authPassword = password;
   state.authConfirm = confirmPassword;
   state.authResetCode = resetCode;
-  state.identityDraft = legacyIdentityCode || state.identityDraft;
   state.authError = "";
   if (!USERNAME_PATTERN.test(username)) {
     showAuthError("用户名为 2-10 个字符，须以中文或英文开头", "#auth-username");
@@ -445,15 +540,11 @@ async function submitAuthentication() {
     showAuthError(password.length < 8 ? "密码至少 8 位" : "密码不能超过 256 位", "#auth-password");
     return;
   }
-  if (mode === "upgrade" && !/^\d{6}$/.test(legacyIdentityCode)) {
-    showAuthError("请输入 6 位原身份码", "#auth-identity");
-    return;
-  }
   if (mode === "reset" && !resetCode.trim()) {
     showAuthError("请输入重置码", "#auth-reset-code");
     return;
   }
-  if ((mode === "register" || mode === "upgrade" || mode === "reset") && password !== confirmPassword) {
+  if ((mode === "register" || mode === "reset") && password !== confirmPassword) {
     showAuthError("两次输入的密码不一致", "#auth-confirm");
     return;
   }
@@ -470,11 +561,6 @@ async function submitAuthentication() {
       }
     } else if (mode === "reset") {
       response = await api("/api/auth/reset", { method: "POST", body: JSON.stringify({ username, resetCode, newPassword: password }) });
-    } else if (mode === "upgrade") {
-      const submitButton = document.querySelector('[data-action="submit-auth"]');
-      if (submitButton) submitButton.textContent = "正在安全迁移待办…";
-      const migration = await prepareLegacyUpgrade(legacyIdentityCode, username);
-      response = await api("/api/auth/upgrade", { method: "POST", body: JSON.stringify({ identityCode: legacyIdentityCode, username, password, ...migration }) });
     } else {
       response = await api("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password }) });
     }
@@ -485,7 +571,7 @@ async function submitAuthentication() {
       const passwordInput = document.querySelector("#auth-password");
       if (passwordInput) passwordInput.value = "";
     }
-    showAuthError(error.message, mode === "upgrade" && !legacyIdentityCode ? "#auth-identity" : "#auth-password");
+    showAuthError(error.message, "#auth-password");
   }
 }
 
@@ -494,30 +580,102 @@ function handleAuthenticationError(error) {
   state.authUsername = state.username || state.authUsername;
   state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = [];
   state.authPassword = ""; state.authConfirm = ""; state.authResetCode = "";
-  sessionStorage.removeItem("rabbittodo-session-seed"); sessionStorage.removeItem("rabbittodo-session-username");
   openAuth("login");
   state.authError = error.status === 403 ? "账号已禁用" : "登录状态已失效，请重新登录";
   render();
   return true;
 }
 
-// Keep the interface responsive while preserving the order of database writes.
-// A failed write reloads the authoritative server state instead of silently losing work.
-function saveInBackground(operation) {
-  pendingMutations += 1;
-  const run = async () => {
+function mutationId() {
+  return crypto.randomUUID ? crypto.randomUUID().replaceAll("-", "") : `${Date.now()}${Math.random().toString(36).slice(2)}`;
+}
+
+function outbox() {
+  return localProfile?.outbox || [];
+}
+
+async function enqueueTaskMutation(kind, payload = {}) {
+  if (!localProfile) localProfile = currentLocalSnapshot();
+  localProfile.outbox = [...outbox(), { id: mutationId(), kind, payload, createdAt: Date.now() }];
+  await persistLocalSnapshot();
+  scheduleOutboxSync(0);
+}
+
+function scheduleOutboxSync(delay = 0) {
+  if (outboxRetryTimer) clearTimeout(outboxRetryTimer);
+  outboxRetryTimer = setTimeout(() => {
+    outboxRetryTimer = 0;
+    flushOutboxAndLoad();
+  }, delay);
+}
+
+async function sendOutboxEntry(entry) {
+  const localId = Number(entry.payload.localId);
+  const resolvedId = resolvedTaskId(localId);
+  if (entry.kind !== "create" && (!resolvedId || resolvedId < 0)) return false;
+  if (entry.kind === "create") {
+    const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(entry.payload.task), headers: { "X-RabbitTodo-Mutation": entry.id } });
+    applyServerTask(response.task, localId, false);
+    return true;
+  }
+  if (entry.kind === "update") {
+    const response = await api(`/api/tasks/${resolvedId}`, { method: "PUT", body: JSON.stringify(entry.payload.task) });
+    applyServerTask(response.task, localId, false);
+    return true;
+  }
+  if (entry.kind === "toggle") {
+    const response = await api(`/api/tasks/${resolvedId}`, { method: "PATCH", body: JSON.stringify({ completed: entry.payload.completed }) });
+    applyServerTask(response.task, localId, false);
+    return true;
+  }
+  if (entry.kind === "delete") {
+    await api(`/api/tasks/${resolvedId}`, { method: "DELETE" });
+    return true;
+  }
+  if (entry.kind === "reorder") {
+    const ids = entry.payload.ids.map((id) => resolvedTaskId(id));
+    const pinnedIds = entry.payload.pinnedIds.map((id) => resolvedTaskId(id));
+    if (ids.some((id) => id < 0) || pinnedIds.some((id) => id < 0)) return false;
+    await api("/api/tasks/reorder", { method: "POST", body: JSON.stringify({ ...entry.payload, ids, pinnedIds }) });
+    return true;
+  }
+  throw new Error("本地同步操作无效");
+}
+
+async function flushOutbox() {
+  if (outboxSyncPromise || !state.identity || state.updateReady || state.updateApplying || !navigator.onLine || !outbox().length) return outboxSyncPromise;
+  outboxSyncPromise = (async () => {
+    pendingMutations += 1;
     try {
-      await operation();
+      while (outbox().length && !state.updateReady && !state.updateApplying) {
+        const entry = outbox()[0];
+        const sent = await sendOutboxEntry(entry);
+        if (!sent) return;
+        localProfile.outbox = outbox().slice(1);
+        outboxRetryAttempt = 0;
+        await persistLocalSnapshot();
+      }
     } catch (error) {
       if (handleAuthenticationError(error)) return;
-      alert(`${error.message}，已恢复服务器中的最新数据。`);
-      await loadTasks({ quiet: true });
+      const delay = SYNC_RETRY_DELAYS[Math.min(outboxRetryAttempt++, SYNC_RETRY_DELAYS.length - 1)];
+      scheduleOutboxSync(delay);
     } finally {
       pendingMutations -= 1;
-      reloadForServiceWorkerUpdate();
+      outboxSyncPromise = null;
+      render();
     }
-  };
-  mutationChain = mutationChain.then(run, run);
+  })();
+  return outboxSyncPromise;
+}
+
+async function flushOutboxAndLoad() {
+  await flushOutbox();
+  if (!outbox().length && !state.updateReady && !state.updateApplying) await loadTasks({ quiet: true });
+}
+
+// Legacy plaintext re-encryption remains best-effort and does not enter the task outbox.
+function saveInBackground(operation) {
+  mutationChain = mutationChain.then(operation, operation).catch(() => {});
   return mutationChain;
 }
 
@@ -557,6 +715,7 @@ async function loadTasks({ quiet = false } = {}) {
       state.tasks = (await api("/api/tasks")).tasks;
       migrateLegacyTaskContent(state.tasks.filter((task) => !task._contentEncrypted));
       lastTaskSyncAt = Date.now();
+      await persistLocalSnapshot();
     } catch (error) {
       if (!handleAuthenticationError(error) && !quiet && !isReloadingForServiceWorker) alert(error.message);
     } finally {
@@ -568,10 +727,10 @@ async function loadTasks({ quiet = false } = {}) {
 }
 
 function refreshActiveTasks(force = false) {
-  if (!state.identity || state.authPromptOpen || state.editor || pointerDrag || pendingMutations || serviceWorkerUpdatePromise || foregroundSyncPromise || serviceWorkerReloadPending || document.visibilityState === "hidden") return;
+  if (!state.identity || state.authPromptOpen || state.editor || pointerDrag || pendingMutations || serviceWorkerUpdatePromise || foregroundSyncPromise || state.updateReady || state.updateApplying || document.visibilityState === "hidden") return;
   // pageshow、focus 与 visibilitychange 往往会连续触发；前台恢复只保留一次读取。
   const interval = force ? 1_500 : 30_000;
-  if (Date.now() - lastTaskSyncAt > interval) loadTasks({ quiet: true });
+  if (Date.now() - lastTaskSyncAt > interval) flushOutboxAndLoad();
 }
 
 function filteredTasks() {
@@ -731,24 +890,29 @@ function identityGate() {
   if (!state.authPromptOpen) return "";
   const submitting = state.authSubmitting;
   const mode = state.authMode;
-  const isRegister = mode === "register" || mode === "upgrade";
+  const isRegister = mode === "register";
   const isReset = mode === "reset";
-  const title = mode === "upgrade" ? "继续使用原有待办" : isRegister ? "创建 RabbitToDo 账号" : isReset ? "重新设置密码" : "欢迎回来";
-  const hint = mode === "upgrade" ? "输入原来的 6 位身份码，再设置用户名和密码。" : isRegister ? "创建账号后，你可以在不同设备上继续管理待办。" : isReset ? "输入重置码并设置新密码，即可重新登录。" : "登录后，继续安排今天要做的事。";
+  const title = isRegister ? "创建 RabbitToDo 账号" : isReset ? "重新设置密码" : "欢迎回来";
+  const hint = isRegister ? "创建账号后，你可以在不同设备上继续管理待办。" : isReset ? "输入重置码并设置新密码，即可重新登录。" : "登录后，继续安排今天要做的事。";
   const disabled = submitting ? "disabled" : "";
-  const legacy = mode === "upgrade" ? `<input id="auth-identity" value="${escapeHtml(state.identityDraft)}" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="原 6 位身份码" required ${disabled} />` : "";
   const reset = isReset ? `<input id="auth-reset-code" value="${escapeHtml(state.authResetCode)}" autocomplete="one-time-code" maxlength="64" placeholder="重置码" required ${disabled} />` : "";
   const confirm = isRegister || isReset ? `<input id="auth-confirm" value="${escapeHtml(state.authConfirm)}" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="再次输入密码" required ${disabled} />` : "";
   const usernameInput = `<input id="auth-username" value="${escapeHtml(state.authUsername)}" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="2" maxlength="10" placeholder="用户名（2–10 位）" required ${disabled} />`;
   const passwordInput = `<input id="auth-password" value="${escapeHtml(state.authPassword)}" type="password" autocomplete="${isRegister || isReset ? "new-password" : "current-password"}" minlength="8" maxlength="256" placeholder="密码（至少 8 位）" required ${disabled} />`;
-  const fields = isReset ? `${usernameInput}${reset}${passwordInput}${confirm}` : `${legacy}${usernameInput}${passwordInput}${confirm}`;
+  const fields = isReset ? `${usernameInput}${reset}${passwordInput}${confirm}` : `${usernameInput}${passwordInput}${confirm}`;
   const errorMessage = state.authError ? `<p class="auth-error" role="alert">${escapeHtml(state.authError)}</p>` : "";
   const submitLabel = authSubmitLabel(mode);
-  return `<div class="identity-gate"><section class="identity-card ${submitting ? "is-submitting" : ""}" id="auth-panel"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>${title}</h2><span>${hint}</span>${fields}${errorMessage}<button class="save-button identity-submit-button" type="button" data-action="submit-auth" ${submitting ? "disabled" : ""}>${submitting ? "处理中…" : submitLabel}</button><div class="auth-links">${mode !== "login" ? '<button type="button" data-action="auth-login">返回登录</button>' : '<button type="button" data-action="auth-register">创建新账号</button>'}${mode !== "upgrade" && mode !== "reset" ? '<button type="button" data-action="auth-upgrade">使用原有身份码</button>' : ""}${mode === "login" ? '<button type="button" data-action="auth-reset">使用重置码</button>' : ""}</div></section></div>`;
+  return `<div class="identity-gate"><section class="identity-card ${submitting ? "is-submitting" : ""}" id="auth-panel"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>${title}</h2><span>${hint}</span>${fields}${errorMessage}<button class="save-button identity-submit-button" type="button" data-action="submit-auth" ${submitting ? "disabled" : ""}>${submitting ? "处理中…" : submitLabel}</button><div class="auth-links">${mode !== "login" ? '<button type="button" data-action="auth-login">返回登录</button>' : '<button type="button" data-action="auth-register">创建新账号</button>'}${mode === "login" ? '<button type="button" data-action="auth-reset">使用重置码</button>' : ""}</div></section></div>`;
+}
+
+function updatePrompt() {
+  if (!state.updateReady && !state.updateApplying) return "";
+  const applying = state.updateApplying;
+  return `<div class="update-gate"><section class="update-card"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><h2>检测到新版本</h2><span>更新后将使用最新功能。当前离线修改已安全保存在本机。</span><button class="save-button" type="button" data-action="apply-update" ${applying ? "disabled" : ""}>${applying ? "更新中…" : "立即更新"}</button></section></div>`;
 }
 
 function pageHeader(heading) {
-  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>${escapeHtml(state.username || "我的")}</span></button></header>`;
+  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>Hi, ${escapeHtml(state.username || "我的")}</span></button></header>`;
 }
 
 function profilePage() {
@@ -807,7 +971,7 @@ function render() {
     ? profilePage()
     : `<section class="workspace workspace-${state.view}" data-view="${state.view}" data-tag="${escapeHtml(state.tag)}" data-color="${escapeHtml(state.color)}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}<p class="task-encryption-note"><i>🔒</i>任务内容已加密存储</p></main></section>`;
   app.innerHTML = `<section class="phone"><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
-    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}`;
+    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}${updatePrompt()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
     persistentAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
@@ -963,12 +1127,12 @@ function persistDraggedOrder() {
   });
 
   const payload = {
-    ids: merged.map((task) => resolvedTaskId(task.id)),
-    pinnedIds: merged.filter((task) => task.pinned).map((task) => resolvedTaskId(task.id)),
+    ids: merged.map((task) => task.id),
+    pinnedIds: merged.filter((task) => task.pinned).map((task) => task.id),
     completed: state.view === "done",
   };
   render();
-  saveInBackground(() => api("/api/tasks/reorder", { method: "POST", body: JSON.stringify(payload) }));
+  persistLocalSnapshot().then(() => enqueueTaskMutation("reorder", payload)).catch((error) => alert(error.message));
 }
 
 function finishPointerDrag(cancelled = false) {
@@ -1035,6 +1199,7 @@ app.addEventListener("click", async (event) => {
   if (button) {
     const action = button.dataset.action;
     if (action === "submit-auth") return submitAuthentication();
+    if (action === "apply-update") return applyServiceWorkerUpdate();
     if (action === "add") return openEditor();
     if (action === "close-editor") {
       state.editor = null;
@@ -1047,13 +1212,14 @@ app.addEventListener("click", async (event) => {
     if (action === "profile") { state.view = "profile"; return render(); }
     if (action === "auth-login") return openAuth("login");
     if (action === "auth-register") return openAuth("register");
-    if (action === "auth-upgrade") return openAuth("upgrade");
     if (action === "auth-reset") return openAuth("reset");
     if (action === "change-password") { state.passwordDialog = !state.passwordDialog; return render(); }
     if (action === "logout") {
       try { await api("/api/auth/logout", { method: "POST", body: "{}" }); } catch {}
       state.authUsername = state.username;
-      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; sessionStorage.removeItem("rabbittodo-session-seed"); sessionStorage.removeItem("rabbittodo-session-username"); encryptionKeyIdentity = ""; encryptionKeyPromise = null; return render();
+      await localClear().catch(() => {});
+      localProfile = null; taskIdAliases.clear(); nextTemporaryTaskId = -1;
+      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; encryptionKeyIdentity = ""; encryptionKeyPromise = null; return render();
     }
     if (action === "toggle-filters") { state.filtersOpen = !state.filtersOpen; return render(); }
     if (action === "tag-filter") { state.tag = button.dataset.tag; return render(); }
@@ -1078,10 +1244,8 @@ app.addEventListener("click", async (event) => {
       task.manual_position = null;
       if (completed) task.status = "none";
       render();
-      saveInBackground(async () => {
-        const response = await api(`/api/tasks/${resolvedTaskId(id)}`, { method: "PATCH", body: JSON.stringify({ completed }) });
-        applyServerTask(response.task, id);
-      });
+      await persistLocalSnapshot();
+      enqueueTaskMutation("toggle", { localId: id, completed }).catch((error) => alert(error.message));
       return;
     }
     if (action === "delete-task") {
@@ -1090,7 +1254,8 @@ app.addEventListener("click", async (event) => {
       state.tasks = state.tasks.filter((task) => task.id !== id);
       state.editor = null;
       render();
-      saveInBackground(() => api(`/api/tasks/${resolvedTaskId(id)}`, { method: "DELETE" }));
+      await persistLocalSnapshot();
+      enqueueTaskMutation("delete", { localId: id }).catch((error) => alert(error.message));
       return;
     }
     return;
@@ -1152,11 +1317,9 @@ app.addEventListener("submit", async (event) => {
         }
         state.editor = null;
         render();
-        saveInBackground(async () => {
-          const encryptedPayload = await encryptTaskContent(payload);
-          const response = await api(`/api/tasks/${resolvedTaskId(editingId)}`, { method: "PUT", body: JSON.stringify(encryptedPayload) });
-          applyServerTask(response.task, editingId);
-        });
+        await persistLocalSnapshot();
+        const encryptedPayload = await encryptTaskContent(payload);
+        await enqueueTaskMutation("update", { localId: editingId, task: encryptedPayload });
       } else {
         const temporaryId = nextTemporaryTaskId--;
         const pinnedAt = payload.pinned ? new Date().toISOString() : null;
@@ -1168,11 +1331,9 @@ app.addEventListener("submit", async (event) => {
         state.editor = null;
         state.view = "todo";
         render();
-        saveInBackground(async () => {
-          const encryptedPayload = await encryptTaskContent(payload);
-          const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(encryptedPayload) });
-          applyServerTask(response.task, temporaryId, true);
-        });
+        await persistLocalSnapshot();
+        const encryptedPayload = await encryptTaskContent(payload);
+        await enqueueTaskMutation("create", { localId: temporaryId, task: encryptedPayload });
       }
       return;
     }
@@ -1187,47 +1348,55 @@ window.addEventListener("pageshow", () => {
 window.addEventListener("focus", () => {
   synchronizeForeground();
 });
+window.addEventListener("online", () => {
+  outboxRetryAttempt = 0;
+  scheduleOutboxSync(500);
+});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") synchronizeForeground();
 });
 setInterval(() => refreshActiveTasks(), 30_000);
 
-if ("serviceWorker" in navigator) {
-  // 旧版本使用 sessionStorage 防重载；移除遗留标记，让之后的每次版本升级都能正常生效。
-  sessionStorage.removeItem("rabbittodo-sw-reloaded");
-  navigator.serviceWorker.addEventListener("message", (event) => {
-    if (event.data?.type === "RABBITTODO_SW_VERSION") handleServiceWorkerVersion(event.data.version);
-  });
-  navigator.serviceWorker.addEventListener("controllerchange", () => probeServiceWorkerVersion());
-  navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).then((registration) => {
-    serviceWorkerRegistration = registration;
-    watchServiceWorkerInstallation(registration);
-    bootstrapAfterServiceWorker();
-  }).catch(() => restoreSession());
-} else {
-  restoreSession();
-}
-
 async function restoreSession() {
-  if (savedIdentity) return render(); // Legacy local code must go through the explicit upgrade flow.
-  const seed = sessionStorage.getItem("rabbittodo-session-seed") || "";
-  const rememberedUsername = sessionStorage.getItem("rabbittodo-session-username") || "";
-  if (!seed || !rememberedUsername) return render();
+  const rememberedUsername = state.username || localProfile?.username || "";
+  if (!rememberedUsername) return render();
   try {
     const response = await api("/api/auth/session");
     if (!response.account || response.account.username !== rememberedUsername) throw new Error("会话不匹配");
-    state.identity = "authenticated"; state.username = response.account.username; state.encryptionSeed = seed; state.authPromptOpen = false;
+    state.identity = "authenticated"; state.username = response.account.username; state.encryptionSeed = response.account.encryptionSeed || state.encryptionSeed; state.authPromptOpen = false;
     encryptionKeyIdentity = ""; encryptionKeyPromise = null;
-    if (serviceWorkerRegistration) await synchronizeForeground(); else await loadTasks();
-  } catch { sessionStorage.removeItem("rabbittodo-session-seed"); sessionStorage.removeItem("rabbittodo-session-username"); render(); }
+    lastSessionLeaseAt = Date.now();
+    await persistLocalSnapshot();
+    if (serviceWorkerRegistration) await synchronizeForeground(); else await flushOutboxAndLoad();
+  } catch (error) {
+    if (error.status === 401 || error.status === 403) handleAuthenticationError(error);
+    else if (!state.tasks.length) render();
+  }
 }
 
 async function bootstrapAfterServiceWorker() {
-  await checkForServiceWorkerUpdate({ force: true });
-  await new Promise((resolve) => setTimeout(resolve, 180));
-  reloadForServiceWorkerUpdate();
-  if (!serviceWorkerReloadPending && !isReloadingForServiceWorker) await restoreSession();
+  checkForServiceWorkerUpdate({ force: true });
+  await restoreSession();
 }
 
-// Do not persist the fixed seed in localStorage. A session-only remembered seed keeps a
-// refreshed tab usable while requiring a password after the browser session ends.
+async function bootstrap() {
+  await restoreLocalSnapshot();
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "RABBITTODO_SW_VERSION") handleServiceWorkerVersion(event.data.version);
+    });
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (state.updateApplying) reloadForServiceWorkerUpdate();
+      else probeServiceWorkerVersion();
+    });
+    navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).then((registration) => {
+      serviceWorkerRegistration = registration;
+      watchServiceWorkerInstallation(registration);
+      bootstrapAfterServiceWorker();
+    }).catch(() => restoreSession());
+  } else {
+    restoreSession();
+  }
+}
+
+bootstrap();
