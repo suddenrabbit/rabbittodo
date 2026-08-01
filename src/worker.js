@@ -3,10 +3,13 @@ const STATUSES = new Set(["none", "in_progress", "paused"]);
 const USERNAME_PATTERN = /^[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_]{1,9}$/u;
 const ENCRYPTION_PREFIX = "rtenc:v1:";
 const ENCRYPTED_VALUE_PATTERN = /^rtenc:v1:[A-Za-z0-9+/]+={0,2}$/;
+const INTERNAL_IDENTITY_PATTERN = /^u_[A-Za-z0-9_-]{43}$/;
 const PASSWORD_ITERATIONS = 210_000;
 const PASSWORD_VERSION = "pbkdf2-sha256-v1";
 const SESSION_DAYS = 30;
 const RESET_MINUTES = 15;
+// Keep the final upgrade invocation within D1 Free's 50-query limit.
+const MAX_UPGRADE_TASKS = 40;
 const DEFAULT_ADMIN_SALT = "RabbitToDo admin fallback v1";
 const DEFAULT_ADMIN_HASH = "HG4xZtIsF6fVSt7cDhso9PvCsMlomht3m6Knv1WIerU=";
 const authFailures = new Map();
@@ -14,8 +17,8 @@ const authFailures = new Map();
 const encoder = new TextEncoder();
 function json(data, status = 200, headers = {}) { return Response.json(data, { status, headers: { "Cache-Control": "no-store", ...headers } }); }
 function b64(bytes) { let binary = ""; for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192)); return btoa(binary); }
-function unb64(value) { const binary = atob(value); return Uint8Array.from(binary, (c) => c.charCodeAt(0)); }
 function randomB64(size = 32) { return b64(crypto.getRandomValues(new Uint8Array(size))); }
+function randomIdentityCode() { return `u_${randomB64(32).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "")}`; }
 async function sha256(value) { return b64(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)))); }
 async function pbkdf2(value, salt, iterations = PASSWORD_ITERATIONS) {
   const material = await crypto.subtle.importKey("raw", encoder.encode(value), "PBKDF2", false, ["deriveBits"]);
@@ -29,7 +32,7 @@ function cookieSecurity(request) { return new URL(request.url).protocol === "htt
 function sessionCookie(token, request, maxAge = SESSION_DAYS * 86400) { return `rabbittodo_session=${token}; Path=/; HttpOnly; SameSite=Strict${cookieSecurity(request)}; Max-Age=${maxAge}`; }
 function clearSessionCookie(request) { return `rabbittodo_session=; Path=/; HttpOnly; SameSite=Strict${cookieSecurity(request)}; Max-Age=0`; }
 function expiry(days = SESSION_DAYS) { return new Date(Date.now() + days * 86400_000).toISOString(); }
-async function bodyFrom(request) { const raw = await request.text(); if (raw.length > 1_000_000) throw new Error("请求内容过大"); try { return raw ? JSON.parse(raw) : {}; } catch { throw new Error("请求格式无效"); } }
+async function bodyFrom(request) { const raw = await request.text(); if (raw.length > 10_000_000) throw new Error("请求内容过大"); try { return raw ? JSON.parse(raw) : {}; } catch { throw new Error("请求格式无效"); } }
 function normalizeUsername(value) { return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("en-US"); }
 function validUsername(value) { return USERNAME_PATTERN.test(String(value || "").normalize("NFKC").trim()); }
 function validPassword(value) { return typeof value === "string" && value.length >= 8 && value.length <= 256; }
@@ -42,21 +45,15 @@ function recordFailure(key) {
   authFailures.set(key, { count, until: Date.now() + delay });
 }
 function clearFailure(key) { authFailures.delete(key); }
-function publicAccount(row) { return { username: row.username, vaultSalt: row.vault_salt, passwordWrappedSeed: row.password_wrapped_seed }; }
+function publicAccount(row, includeSeed = true) { return { username: row.username, ...(includeSeed ? { encryptionSeed: row.code } : {}) }; }
 function taskFromRow(row) { if (!row) return null; const { identity_code, ...task } = row; let tags = []; try { tags = JSON.parse(task.tags || "[]"); } catch {} return { ...task, completed: Boolean(task.completed), pinned: Boolean(task.pinned), tags, details: task.details || "", status: task.status || "none" }; }
 function sanitizeTaskText(value, { field, plainLimit, encryptedLimit, required = false }) { const raw = String(value || "").trim(); if (!raw) { if (required) throw new Error(`请填写${field}`); return ""; } if (raw.startsWith(ENCRYPTION_PREFIX)) { if (!ENCRYPTED_VALUE_PATTERN.test(raw) || raw.length > encryptedLimit) throw new Error(`${field}密文无效`); return raw; } return raw.slice(0, plainLimit); }
 function sanitizeTask(input) { const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 200, encryptedLimit: 4096, required: true }); const color = COLORS.has(input.color) ? input.color : "violet"; const tags = Array.isArray(input.tags) ? [...new Set(input.tags.map((tag) => String(tag).trim().replace(/^#/, "")).filter(Boolean))].slice(0, 12) : []; const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 2000, encryptedLimit: 16000 }); const status = STATUSES.has(input.status) ? input.status : "none"; const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.dueDate || "")) ? input.dueDate : null; return { title, color, tags, details, status, dueDate, pinned: Boolean(input.pinned) }; }
 function sanitizeEncryptedTaskContent(input) { const id = Number(input.id); if (!Number.isInteger(id) || id <= 0) throw new Error("事项编号无效"); const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 0, encryptedLimit: 4096, required: true }); const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 0, encryptedLimit: 16000 }); if (!title.startsWith(ENCRYPTION_PREFIX) || (details && !details.startsWith(ENCRYPTION_PREFIX))) throw new Error("任务密文无效"); return { id, title, details }; }
+function sanitizeUpgradeTask(input) { const task = sanitizeEncryptedTaskContent(input); const updatedAt = String(input.updatedAt || ""); if (!updatedAt || updatedAt.length > 64) throw new Error("任务版本信息无效"); return { ...task, updatedAt }; }
 function taskIdFrom(pathname) { return Number(pathname.match(/^\/api\/tasks\/(\d+)$/)?.[1] || 0) || null; }
 async function taskById(db, id, identity) { return taskFromRow(await db.prepare("SELECT * FROM tasks WHERE id = ? AND identity_code = ?").bind(id, identity).first()); }
 
-function masterKey(env) { const configured = String(env.SERVER_MASTER_KEY || ""); if (configured.length >= 32) return configured; throw new Error("SERVER_MASTER_KEY 未配置或长度不足 32 位"); }
-async function masterCryptoKey(env) { return crypto.subtle.importKey("raw", await crypto.subtle.digest("SHA-256", encoder.encode(masterKey(env))), "AES-GCM", false, ["encrypt", "decrypt"]); }
-async function serverWrapSeed(seed, env) { const iv = crypto.getRandomValues(new Uint8Array(12)); const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await masterCryptoKey(env), encoder.encode(seed))); const packed = new Uint8Array(iv.length + encrypted.length); packed.set(iv); packed.set(encrypted, iv.length); return b64(packed); }
-async function serverUnwrapSeed(wrapped, env) { const packed = unb64(wrapped); return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: packed.slice(0, 12) }, await masterCryptoKey(env), packed.slice(12))); }
-async function wrappedSeedMatches(wrapped, password, salt, expectedSeed) {
-  try { return timingSafeEqual(await vaultUnwrap(wrapped, password, salt), expectedSeed); } catch { return false; }
-}
 async function issueSession(db, identityCode) { const token = randomB64(32); await db.prepare("INSERT INTO sessions (token_hash, identity_code, expires_at) VALUES (?, ?, ?)").bind(await sha256(token), identityCode, expiry()).run(); return token; }
 async function accountFromSession(request, db) { const token = cookieValue(request, "rabbittodo_session"); if (!token) return null; const row = await db.prepare("SELECT identities.* FROM sessions JOIN identities ON identities.code = sessions.identity_code WHERE sessions.token_hash = ? AND datetime(sessions.expires_at) > CURRENT_TIMESTAMP").bind(await sha256(token)).first(); return row?.status === "enabled" && row.username ? row : null; }
 async function revokeSessions(db, code) { await db.prepare("DELETE FROM sessions WHERE identity_code = ?").bind(code).run(); }
@@ -64,23 +61,19 @@ async function adminAuthorized(request, env) { const supplied = String(request.h
 
 async function authApi(request, env, url) {
   const db = env.DB; const { pathname } = url;
-  if (request.method === "GET" && pathname === "/api/auth/session") { const account = await accountFromSession(request, db); return account ? json({ account: publicAccount(account) }) : json({ error: "请登录" }, 401); }
+  if (request.method === "GET" && pathname === "/api/auth/session") { const account = await accountFromSession(request, db); return account ? json({ account: publicAccount(account, false) }) : json({ error: "请登录" }, 401); }
   if (request.method === "POST" && pathname === "/api/auth/register") {
-    const { username, password, vaultSalt, passwordWrappedSeed, encryptionSeed } = await bodyFrom(request); const display = String(username || "").normalize("NFKC").trim(); const normalized = normalizeUsername(display);
+    const { username, password } = await bodyFrom(request); const display = String(username || "").normalize("NFKC").trim(); const normalized = normalizeUsername(display);
     if (!validUsername(display)) return json({ error: "用户名为 2-10 个字符，须以中文或英文开头" }, 400);
     if (!validPassword(password)) return json({ error: "密码至少 8 位" }, 400);
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(String(encryptionSeed || "")) || String(encryptionSeed).length < 24 || String(encryptionSeed).length > 256) return json({ error: "账号安全信息校验失败，请重试" }, 400);
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(String(vaultSalt || "")) || !String(passwordWrappedSeed || "").startsWith("rtvault:v1:") || !await wrappedSeedMatches(passwordWrappedSeed, password, vaultSalt, encryptionSeed)) return json({ error: "账号安全信息校验失败，请重试" }, 400);
     const existing = await db.prepare("SELECT code FROM identities WHERE username_normalized = ?").bind(normalized).first(); if (existing) return json({ error: "用户名已存在，请直接登录" }, 409);
-    let code; for (let attempts = 0; attempts < 10; attempts += 1) { code = `u_${randomB64(16).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "")}`; if (!await db.prepare("SELECT code FROM identities WHERE code = ?").bind(code).first()) break; code = null; }
-    if (!code) return json({ error: "创建账号失败，请重试" }, 503);
-    const record = await passwordRecord(password); const serverWrapped = await serverWrapSeed(encryptionSeed, env);
-    try {
-      await db.prepare("INSERT INTO identities (code, status, username, username_normalized, password_hash, password_salt, vault_salt, password_params, password_wrapped_seed, server_wrapped_seed, upgraded_at) VALUES (?, 'enabled', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)").bind(code, display, normalized, record.hash, record.salt, vaultSalt, record.params, passwordWrappedSeed, serverWrapped).run();
-    } catch (error) {
-      if (String(error).includes("UNIQUE constraint failed: identities.username_normalized")) return json({ error: "用户名已存在，请直接登录" }, 409);
-      throw error;
+    const record = await passwordRecord(password); let code = "";
+    for (let attempts = 0; attempts < 10 && !code; attempts += 1) {
+      const candidate = randomIdentityCode();
+      try { await db.prepare("INSERT INTO identities (code, status, username, username_normalized, password_hash, password_salt, password_params, upgraded_at) VALUES (?, 'enabled', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)").bind(candidate, display, normalized, record.hash, record.salt, record.params).run(); code = candidate; }
+      catch (error) { const message = String(error); if (message.includes("identities.username_normalized")) return json({ error: "用户名已存在，请直接登录" }, 409); if (!message.includes("identities.code")) throw error; }
     }
+    if (!code) return json({ error: "创建账号失败，请重试" }, 503);
     const token = await issueSession(db, code); const account = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(code).first(); return json({ account: publicAccount(account) }, 201, { "Set-Cookie": sessionCookie(token, request) });
   }
   if (request.method === "POST" && pathname === "/api/auth/login") {
@@ -91,48 +84,65 @@ async function authApi(request, env, url) {
     clearFailure(key); const token = await issueSession(db, account.code); return json({ account: publicAccount(account) }, 200, { "Set-Cookie": sessionCookie(token, request) });
   }
   if (request.method === "POST" && pathname === "/api/auth/logout") { const token = cookieValue(request, "rabbittodo_session"); if (token) await db.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run(); return json({ ok: true }, 200, { "Set-Cookie": clearSessionCookie(request) }); }
-  if (request.method === "POST" && pathname === "/api/auth/upgrade") {
-    const { identityCode, username, password, vaultSalt, passwordWrappedSeed, encryptionSeed } = await bodyFrom(request); const display = String(username || "").normalize("NFKC").trim(); const normalized = normalizeUsername(display);
+  if (request.method === "POST" && pathname === "/api/auth/upgrade/prepare") {
+    const { identityCode, username } = await bodyFrom(request); const display = String(username || "").normalize("NFKC").trim(); const normalized = normalizeUsername(display);
     if (!/^\d{6}$/.test(String(identityCode || ""))) return json({ error: "请输入 6 位旧身份码" }, 400);
+    if (!validUsername(display)) return json({ error: "用户名为 2-10 个字符，须以中文或英文开头" }, 400);
+    const legacy = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(identityCode).first(); if (!legacy) return json({ error: "没有找到这个身份码，请检查后重试" }, 404); if (legacy.username) return json({ error: "这个账号已经设置过用户名，请直接登录" }, 409); if (legacy.status === "disabled") return json({ error: "账号已禁用" }, 403);
+    if (await db.prepare("SELECT code FROM identities WHERE username_normalized = ?").bind(normalized).first()) return json({ error: "用户名已存在" }, 409);
+    const { results } = await db.prepare("SELECT * FROM tasks WHERE identity_code = ? ORDER BY id").bind(identityCode).all();
+    if (results.length > MAX_UPGRADE_TASKS) return json({ error: "待办数量较多，暂时无法自动升级，请联系管理员" }, 409);
+    let newIdentityCode = ""; for (let attempts = 0; attempts < 10 && !newIdentityCode; attempts += 1) { const candidate = randomIdentityCode(); if (!await db.prepare("SELECT code FROM identities WHERE code = ?").bind(candidate).first()) newIdentityCode = candidate; }
+    if (!newIdentityCode) return json({ error: "暂时无法生成新账号，请重试" }, 503);
+    return json({ newIdentityCode, tasks: results.map(taskFromRow) });
+  }
+  if (request.method === "POST" && pathname === "/api/auth/upgrade") {
+    const { identityCode, newIdentityCode, username, password, tasks } = await bodyFrom(request); const display = String(username || "").normalize("NFKC").trim(); const normalized = normalizeUsername(display);
+    if (!/^\d{6}$/.test(String(identityCode || ""))) return json({ error: "请输入 6 位旧身份码" }, 400);
+    if (!INTERNAL_IDENTITY_PATTERN.test(String(newIdentityCode || ""))) return json({ error: "新身份信息无效，请重新升级" }, 400);
     const legacy = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(identityCode).first(); if (!legacy) return json({ error: "没有找到这个身份码，请检查后重试" }, 404); if (legacy.username) return json({ error: "这个账号已经设置过用户名，请直接登录" }, 409); if (legacy.status === "disabled") return json({ error: "账号已禁用" }, 403);
     if (!validUsername(display)) return json({ error: "用户名为 2-10 个字符，须以中文或英文开头" }, 400);
     if (!validPassword(password)) return json({ error: "密码至少 8 位" }, 400);
     if (await db.prepare("SELECT code FROM identities WHERE username_normalized = ?").bind(normalized).first()) return json({ error: "用户名已存在" }, 409);
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(String(vaultSalt || "")) || !String(passwordWrappedSeed || "").startsWith("rtvault:v1:") || String(encryptionSeed) !== String(identityCode) || !await wrappedSeedMatches(passwordWrappedSeed, password, vaultSalt, encryptionSeed)) return json({ error: "账号信息校验失败，请刷新页面后重试" }, 400);
-    const record = await passwordRecord(password); const serverWrapped = await serverWrapSeed(encryptionSeed, env); let upgraded;
+    if (!Array.isArray(tasks) || tasks.length > MAX_UPGRADE_TASKS) return json({ error: "任务迁移数据无效" }, 400);
+    const migrated = tasks.map(sanitizeUpgradeTask); if (new Set(migrated.map((task) => task.id)).size !== migrated.length) return json({ error: "任务迁移数据重复" }, 400);
+    const { results: currentTasks } = await db.prepare("SELECT id, updated_at FROM tasks WHERE identity_code = ? ORDER BY id").bind(identityCode).all();
+    const submitted = new Map(migrated.map((task) => [task.id, task]));
+    if (currentTasks.length !== migrated.length || currentTasks.some((task) => submitted.get(Number(task.id))?.updatedAt !== String(task.updated_at))) return json({ error: "待办在升级期间发生变化，请重新操作" }, 409);
+    if (await db.prepare("SELECT code FROM identities WHERE code = ?").bind(newIdentityCode).first()) return json({ error: "新身份码发生冲突，请重新操作", code: "identity_conflict" }, 409);
+    const record = await passwordRecord(password); const token = randomB64(32); const tokenHash = await sha256(token);
     try {
-      upgraded = await db.prepare("UPDATE identities SET status = 'enabled', username = ?, username_normalized = ?, password_hash = ?, password_salt = ?, vault_salt = ?, password_params = ?, password_wrapped_seed = ?, server_wrapped_seed = ?, upgraded_at = CURRENT_TIMESTAMP WHERE code = ? AND username IS NULL").bind(display, normalized, record.hash, record.salt, vaultSalt, record.params, passwordWrappedSeed, serverWrapped, identityCode).run();
+      const statements = [
+        db.prepare("INSERT INTO identities (code, created_at, status, reviewed_at, username, username_normalized, password_hash, password_salt, password_params, upgraded_at) SELECT ?, created_at, 'enabled', reviewed_at, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP FROM identities WHERE code = ? AND username IS NULL AND status != 'disabled'").bind(newIdentityCode, display, normalized, record.hash, record.salt, record.params, identityCode),
+        ...migrated.map((task) => db.prepare("UPDATE tasks SET identity_code = ?, title = ?, details = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ? AND updated_at = ?").bind(newIdentityCode, task.title, task.details, task.id, identityCode, task.updatedAt)),
+        db.prepare("DELETE FROM sessions WHERE identity_code = ?").bind(identityCode),
+        db.prepare("DELETE FROM password_reset_codes WHERE identity_code = ?").bind(identityCode),
+        db.prepare("DELETE FROM identities WHERE code = ? AND username IS NULL AND status != 'disabled'").bind(identityCode),
+        db.prepare("INSERT INTO sessions (token_hash, identity_code, expires_at) VALUES (?, ?, ?)").bind(tokenHash, newIdentityCode, expiry()),
+      ];
+      await db.batch(statements);
     } catch (error) {
-      if (String(error).includes("UNIQUE constraint failed: identities.username_normalized")) return json({ error: "用户名已存在" }, 409);
+      const message = String(error); if (message.includes("identities.username_normalized")) return json({ error: "用户名已存在" }, 409); if (message.includes("identities.code")) return json({ error: "新身份码发生冲突，请重新操作", code: "identity_conflict" }, 409); if (message.includes("FOREIGN KEY")) return json({ error: "待办在升级期间发生变化，请重新操作" }, 409);
       throw error;
     }
-    if (!upgraded.meta.changes) return json({ error: "这个账号已经设置过用户名，请直接登录" }, 409);
-    const token = await issueSession(db, identityCode); const account = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(identityCode).first(); return json({ account: publicAccount(account) }, 200, { "Set-Cookie": sessionCookie(token, request) });
+    const account = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(newIdentityCode).first(); return json({ account: publicAccount(account) }, 200, { "Set-Cookie": sessionCookie(token, request) });
   }
   if (request.method === "POST" && pathname === "/api/auth/password") {
-    const account = await accountFromSession(request, db); if (!account) return json({ error: "请登录" }, 401); const { currentPassword, newPassword, vaultSalt, passwordWrappedSeed } = await bodyFrom(request);
-    if (!await passwordMatches(String(currentPassword || ""), account)) return json({ error: "当前密码错误" }, 401); if (!validPassword(newPassword) || !/^[A-Za-z0-9+/]+={0,2}$/.test(String(vaultSalt || "")) || !String(passwordWrappedSeed || "").startsWith("rtvault:v1:") || !await wrappedSeedMatches(passwordWrappedSeed, newPassword, vaultSalt, await serverUnwrapSeed(account.server_wrapped_seed, env))) return json({ error: "新密码设置失败，请重试" }, 400);
-    const record = await passwordRecord(newPassword); await db.prepare("UPDATE identities SET password_hash = ?, password_salt = ?, vault_salt = ?, password_params = ?, password_wrapped_seed = ? WHERE code = ?").bind(record.hash, record.salt, vaultSalt, record.params, passwordWrappedSeed, account.code).run(); await revokeSessions(db, account.code); const token = await issueSession(db, account.code); const next = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(account.code).first(); return json({ account: publicAccount(next) }, 200, { "Set-Cookie": sessionCookie(token, request) });
+    const account = await accountFromSession(request, db); if (!account) return json({ error: "请登录" }, 401); const { currentPassword, newPassword } = await bodyFrom(request);
+    if (!await passwordMatches(String(currentPassword || ""), account)) return json({ error: "当前密码错误" }, 401); if (!validPassword(newPassword)) return json({ error: "新密码至少 8 位" }, 400);
+    const record = await passwordRecord(newPassword); await db.prepare("UPDATE identities SET password_hash = ?, password_salt = ?, password_params = ? WHERE code = ?").bind(record.hash, record.salt, record.params, account.code).run(); await revokeSessions(db, account.code); const token = await issueSession(db, account.code); const next = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(account.code).first(); return json({ account: publicAccount(next) }, 200, { "Set-Cookie": sessionCookie(token, request) });
   }
   if (request.method === "POST" && pathname === "/api/auth/reset") {
     const { username, resetCode, newPassword } = await bodyFrom(request); const key = failureKey(request, username); if (isRateLimited(key)) return json({ error: "尝试过于频繁，请稍后再试" }, 429); const account = await db.prepare("SELECT * FROM identities WHERE username_normalized = ?").bind(normalizeUsername(username)).first(); if (!account || !validPassword(newPassword)) { recordFailure(key); return json({ error: "请检查用户名和新密码" }, 400); }
     if (account.status !== "enabled") return json({ error: "账号已禁用" }, 403);
     const resetCodeHash = await sha256(String(resetCode || ""));
-    const seed = await serverUnwrapSeed(account.server_wrapped_seed, env); const record = await passwordRecord(newPassword); const vaultSalt = randomB64(16); const wrapped = await vaultWrap(seed, newPassword, vaultSalt);
+    const record = await passwordRecord(newPassword);
     const claimed = await db.prepare("UPDATE password_reset_codes SET used_at = CURRENT_TIMESTAMP WHERE code_hash = ? AND identity_code = ? AND used_at IS NULL AND datetime(expires_at) > CURRENT_TIMESTAMP").bind(resetCodeHash, account.code).run();
     if (!claimed.meta.changes) { recordFailure(key); return json({ error: "重置码无效或已过期" }, 400); }
-    await db.batch([db.prepare("UPDATE identities SET password_hash = ?, password_salt = ?, vault_salt = ?, password_params = ?, password_wrapped_seed = ? WHERE code = ?").bind(record.hash, record.salt, vaultSalt, record.params, wrapped, account.code), db.prepare("DELETE FROM sessions WHERE identity_code = ?").bind(account.code)]);
+    await db.batch([db.prepare("UPDATE identities SET password_hash = ?, password_salt = ?, password_params = ? WHERE code = ?").bind(record.hash, record.salt, record.params, account.code), db.prepare("DELETE FROM sessions WHERE identity_code = ?").bind(account.code)]);
     clearFailure(key); const token = await issueSession(db, account.code); const next = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(account.code).first(); return json({ account: publicAccount(next) }, 200, { "Set-Cookie": sessionCookie(token, request) });
   }
   return null;
-}
-async function vaultWrap(seed, password, salt) { const key = await crypto.subtle.importKey("raw", await pbkdf2(password, salt), "AES-GCM", false, ["encrypt"]); const iv = crypto.getRandomValues(new Uint8Array(12)); const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoder.encode(seed))); const packed = new Uint8Array(iv.length + encrypted.length); packed.set(iv); packed.set(encrypted, iv.length); return `rtvault:v1:${b64(packed)}`; }
-async function vaultUnwrap(wrapped, password, salt) {
-  if (!String(wrapped || "").startsWith("rtvault:v1:")) throw new Error("保险箱格式无效");
-  const packed = unb64(String(wrapped).slice("rtvault:v1:".length));
-  if (packed.length < 29) throw new Error("保险箱内容无效");
-  const key = await crypto.subtle.importKey("raw", await pbkdf2(password, salt), "AES-GCM", false, ["decrypt"]);
-  return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: packed.slice(0, 12) }, key, packed.slice(12)));
 }
 
 async function adminApi(request, env, pathname) {

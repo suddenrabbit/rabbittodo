@@ -1,13 +1,10 @@
--- Keep the legacy identity and task tables intact. Existing six-digit codes remain
--- the task partition and encryption seed for users who upgrade.
+-- Keep the legacy identity and task tables intact. Legacy six-digit codes are
+-- replaced atomically with 256-bit random internal codes when their users upgrade.
 ALTER TABLE identities ADD COLUMN username TEXT;
 ALTER TABLE identities ADD COLUMN username_normalized TEXT;
 ALTER TABLE identities ADD COLUMN password_hash TEXT;
 ALTER TABLE identities ADD COLUMN password_salt TEXT;
-ALTER TABLE identities ADD COLUMN vault_salt TEXT;
 ALTER TABLE identities ADD COLUMN password_params TEXT;
-ALTER TABLE identities ADD COLUMN password_wrapped_seed TEXT;
-ALTER TABLE identities ADD COLUMN server_wrapped_seed TEXT;
 ALTER TABLE identities ADD COLUMN upgraded_at TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS identities_username_normalized_idx

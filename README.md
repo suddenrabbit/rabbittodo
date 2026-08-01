@@ -39,18 +39,18 @@ RabbitToDo 是一个面向个人使用的轻量待办 PWA，围绕“快速记�
 
 - 用户名用于登录和界面展示，长度为 2–10 位；英文大小写按同一用户名处理。
 - 新用户名确认一次密码后自动创建并登录，不再进入管理员审批流程。
-- 既有 6 位身份码用户首次打开新版时，需使用原身份码并设置用户名、密码；升级不改变其任务归属和任务密文。
+- 既有 6 位身份码用户首次打开新版时，需使用原身份码并设置用户名、密码；浏览器会把任务重新加密，账号与任务随后切换到新的 256 位随机内部身份码。
 - 管理后台位于 `/console/`，支持查看、启用、禁用账号，以及生成一次性密码重置码。
 - 历史 `pending` 账号在 migration 中自动转为 `enabled`，已有 `disabled` 状态保持不变。
 
 ### 内容加密
 
-- 既有用户继续使用原 6 位身份码作为固定加密种子；新用户使用独立生成的随机内部身份和 256 位随机加密种子。
-- 密码用于解锁固定加密种子，而不直接作为任务密钥；修改或重置密码只重新包裹同一个种子，不改任务密文。
+- 新用户直接使用 256 位随机内部身份码作为固定加密种子；既有用户升级时也会生成同规格的新身份码，并在浏览器中把原任务从旧身份码密钥重新加密到新身份码密钥。
+- 密码只用于服务端认证，不直接参与任务加密；修改或重置密码不会改变内部身份码和任务密文。
 - 任务标题和详情在发送到 Worker 前加密，D1 中保存 `rtenc:v1:...` 密文。
 - 标签、颜色、日期、状态和排序字段保持明文，以支持服务端存储和客户端筛选排序。
 - 旧的明文任务由新版客户端首次读取后在后台分批加密回写。
-- 为支持管理员密码重置，服务端使用稳定的 `SERVER_MASTER_KEY` 保存加密种子的恢复副本；这意味着该模型不是服务端不可解密的零知识架构。
+- 内部身份码同时作为任务的数据分区键保存在 D1，因此该模型延续 1.0 的安全边界，不是服务端不可解密的零知识架构；优点是不依赖平台 Secret 或额外主密钥。
 
 ### PWA 与多端体验
 
@@ -87,14 +87,6 @@ pnpm dev --port 8792
 
 本地地址通常为 [http://localhost:8792](http://localhost:8792)。使用身份码 `246810` 验证既有用户首次升级，也可以输入一个新用户名验证注册流程。本地 Wrangler 使用模拟 D1，不会修改生产数据库。
 
-本地开发需在被 Git 忽略的 `.dev.vars` 中配置仅供开发使用的主密钥：
-
-```text
-SERVER_MASTER_KEY=rabbittodo-local-development-master-key-not-for-production
-```
-
-该值仅供本地使用。生产环境必须设置独立、至少 32 位、稳定且妥善备份的 `SERVER_MASTER_KEY`，服务端没有固定主密钥回退。
-
 常用检查：
 
 ```bash
@@ -114,7 +106,6 @@ git status --short
 pnpm install --frozen-lockfile
 pnpm exec wrangler login
 pnpm run db:create
-pnpm exec wrangler secret put SERVER_MASTER_KEY
 ```
 
 把命令输出的 `database_id` 写入 `wrangler.jsonc`，然后执行：
@@ -124,7 +115,7 @@ pnpm run db:migrate:remote
 pnpm run deploy
 ```
 
-Cloudflare Git 集成可关联 GitHub `main` 分支自动部署。正式环境必须使用 HTTPS，才能完整支持 iOS PWA 和 Web Crypto。`SERVER_MASTER_KEY` 应使用高熵随机值，后续不可随意更换或遗失，否则管理员密码重置将无法恢复既有用户的加密种子。
+Cloudflare Git 集成可关联 GitHub `main` 分支自动部署。正式环境必须使用 HTTPS，才能完整支持 iOS PWA 和 Web Crypto。
 
 ## 日常发布
 
@@ -134,7 +125,7 @@ Cloudflare Git 集成可关联 GitHub `main` 分支自动部署。正式环境�
 pnpm run db:migrate:remote
 ```
 
-本次账户升级需先配置生产 `SERVER_MASTER_KEY`，再执行 `migrations/0006_user_accounts.sql`，确认迁移成功后才可部署依赖新字段的代码。迁移只为既有账号表补充可空字段并新增会话、重置码表，不修改或重建任务表；既有 `pending` 自动启用，`disabled` 保持不变。
+本次账户升级需先执行 `migrations/0006_user_accounts.sql`，确认成功后才可部署依赖新字段的代码。迁移只为既有账号表补充可空字段并新增会话、重置码表，不修改或重建任务表；既有 `pending` 自动启用，`disabled` 保持不变。老用户真正登录升级时，应用再以事务方式更新该用户的任务归属与密文。
 
 其他发布同样应在确认 migration 成功后再推送 Git，由 Cloudflare 自动部署。迁移必须是增量且保护既有数据，禁止通过删除或重建生产表来完成普通升级。
 
@@ -147,7 +138,7 @@ pnpm exec wrangler deployments list
 pnpm exec wrangler d1 time-travel info rabbittodo
 ```
 
-本次账户升级的推荐顺序是：确认生产 `SERVER_MASTER_KEY` 已配置且已有安全备份，记录上述回退点，执行 `pnpm run db:migrate:remote`，确认成功后再部署代码并完成登录、旧用户升级、任务读取和管理后台烟雾测试。
+本次账户升级的推荐顺序是：记录上述回退点，执行 `pnpm run db:migrate:remote`，确认成功后再部署代码并完成登录、旧用户升级、任务读取和管理后台烟雾测试。
 
 如果发布后只是前端或 Worker 代码故障，优先在 Cloudflare Dashboard 的 **Workers & Pages → rabbittodo → Deployments** 回退到上一稳定版本，或使用：
 
@@ -155,7 +146,7 @@ pnpm exec wrangler d1 time-travel info rabbittodo
 pnpm exec wrangler rollback [上一稳定版本 ID]
 ```
 
-代码回退不会自动回退 D1。本次 `0006_user_accounts.sql` 是增量迁移，保留新增列和新表不会妨碍 1.0 Worker 访问原账号与任务表，因此普通故障不应恢复数据库。临时回到 1.0 后，新注册账号无法通过旧身份码界面登录，已升级的旧用户也可能需要再次使用原身份码；应尽快修复并重新发布新版。
+代码回退不会自动回退 D1。本次 `0006_user_accounts.sql` 本身是增量迁移，保留新增列和新表不会妨碍 1.0 Worker 读取尚未升级的老用户；但一旦已有用户完成升级，其旧身份码与旧密文已被随机内部身份码和新密文替换，1.0 Worker 将无法识别这些账号。生产发布后若尚无人升级，可临时回退代码；若已有账号完成升级，应保持新版数据不动并优先修复、重新部署新版，不能要求用户再使用已经失效的旧身份码。
 
 只有 migration 错误或生产数据被破坏时，才停止写入并使用发布前 bookmark 恢复 D1：
 
@@ -193,9 +184,10 @@ pnpm exec wrangler d1 execute rabbittodo --remote --file=/tmp/rabbittodo-data.sq
 
 ## 已知边界与后续方向
 
-- 既有用户继续沿用 6 位身份码作为加密种子，兼容性优先，但其种子空间仍只有 100 万种组合；新用户不受此限制。
+- 既有用户升级前仍以原 6 位身份码读取任务；升级成功后，旧身份记录和旧密文会被新的 256 位随机身份码与新密文原子替换。
+- 为兼容 D1 免费套餐的单次查询上限，既有账号目前最多自动迁移 40 条任务；超过上限时不会改动旧账号或密文，需要先制定单独迁移方案。
 - 解锁后的加密种子只保存在当前浏览器会话的 `sessionStorage`。同一会话刷新可继续使用，完全关闭浏览器后即使服务端会话尚有效，也需要再次输入密码解锁。
 - 登录失败限速目前保存在单个 Worker 实例内，正式扩大使用规模前可迁移到 Durable Object、KV 或其他跨实例方案。
 - 管理后台继续保留默认密码 `zhoumeng1987` 的哈希回退，源码不保存明文，但默认口令本身仍属于过渡方案；生产可用 Worker Secret `ADMIN_PASSWORD` 覆盖。
-- 管理员重置依赖 `SERVER_MASTER_KEY` 恢复并重新包裹固定加密种子；应限制后台权限并安全备份该主密钥。
+- 管理员一次性重置码只重置密码哈希，内部身份码和任务密文保持不变；获得重置码等同于获得该账号访问权，因此应严格限制后台权限。
 - 历史明文自动加密逻辑应保留过渡期；确认生产 D1 不再存在明文后，可在后续版本评估清理并强制只接受密文。

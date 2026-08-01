@@ -1080,3 +1080,35 @@ body.is-task-dragging {
     margin-top: 9px;
   }
 }
+
+/* In portrait, keep the page heading and filters still while only tasks scroll. */
+@media (orientation: portrait) {
+  :root .content-scroll.content-scroll-tasks {
+    overflow: hidden;
+  }
+
+  :root .content-scroll-tasks .workspace {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  :root .content-scroll-tasks .workspace-overview {
+    display: block;
+    flex: 0 0 auto;
+  }
+
+  :root .content-scroll-tasks .workspace-tasks {
+    display: block;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  :root .content-scroll-tasks .workspace-tasks::-webkit-scrollbar {
+    display: none;
+  }
+}

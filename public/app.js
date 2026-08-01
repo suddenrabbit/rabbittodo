@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260801.002112";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v40";
+const APP_VERSION = "v20260801.110605";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v43";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -9,7 +9,6 @@ const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const ENCRYPTION_PREFIX = "rtenc:v1:";
 const ENCRYPTION_SALT = "RabbitToDo task content v1";
 const ENCRYPTION_ITERATIONS = 120_000;
-const VAULT_ITERATIONS = 210_000;
 const USERNAME_PATTERN = /^[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_]{1,9}$/u;
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -300,8 +299,9 @@ function datePicker() {
 }
 
 async function api(path, options = {}) {
+  const { decrypt = true, ...fetchOptions } = options;
   const response = await fetch(path, {
-    ...options,
+    ...fetchOptions,
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   const payload = await response.json();
@@ -311,33 +311,12 @@ async function api(path, options = {}) {
     error.code = payload.code || "";
     throw error;
   }
-  return decryptApiPayload(payload);
+  return decrypt ? decryptApiPayload(payload) : payload;
 }
 
-async function vaultKeyFor(password, salt, usages) {
-  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey({ name: "PBKDF2", salt: new TextEncoder().encode(salt), iterations: VAULT_ITERATIONS, hash: "SHA-256" }, material, { name: "AES-GCM", length: 256 }, false, usages);
-}
-
-function randomBase64(size) { return bytesToBase64(crypto.getRandomValues(new Uint8Array(size))); }
-
-async function wrapEncryptionSeed(seed, password, salt) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await vaultKeyFor(password, salt, ["encrypt"]), new TextEncoder().encode(seed)));
-  const packed = new Uint8Array(iv.length + encrypted.length); packed.set(iv); packed.set(encrypted, iv.length);
-  return `rtvault:v1:${bytesToBase64(packed)}`;
-}
-
-async function unwrapEncryptionSeed(wrapped, password, salt) {
-  if (!String(wrapped || "").startsWith("rtvault:v1:")) throw new Error("账号信息异常，请重新登录");
-  try {
-    const packed = base64ToBytes(wrapped.slice("rtvault:v1:".length));
-    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: packed.slice(0, 12) }, await vaultKeyFor(password, salt, ["decrypt"]), packed.slice(12)));
-  } catch { throw new Error("密码校验失败，请重新输入"); }
-}
-
-async function enterAccount(account, password) {
-  const seed = await unwrapEncryptionSeed(account.passwordWrappedSeed, password, account.vaultSalt);
+async function enterAccount(account) {
+  const seed = String(account.encryptionSeed || "");
+  if (!/^u_[A-Za-z0-9_-]{43}$/.test(seed)) throw new Error("账号身份信息无效，请重新登录");
   state.identity = "authenticated";
   state.username = account.username;
   state.encryptionSeed = seed;
@@ -357,6 +336,20 @@ async function enterAccount(account, password) {
   sessionStorage.setItem("rabbittodo-session-seed", seed);
   sessionStorage.setItem("rabbittodo-session-username", account.username);
   if (serviceWorkerRegistration) await synchronizeForeground(); else await loadTasks();
+}
+
+async function prepareLegacyUpgrade(identityCode, username) {
+  const prepared = await api("/api/auth/upgrade/prepare", { method: "POST", decrypt: false, body: JSON.stringify({ identityCode, username }) });
+  const newIdentityCode = String(prepared.newIdentityCode || "");
+  if (!/^u_[A-Za-z0-9_-]{43}$/.test(newIdentityCode)) throw new Error("暂时无法生成新账号，请重试");
+  const plaintextTasks = await Promise.all(prepared.tasks.map((task) => decryptTaskContent(task, identityCode)));
+  const migratedTasks = await Promise.all(plaintextTasks.map(async (task) => {
+    const encrypted = await encryptTaskContent(task, newIdentityCode);
+    const verified = await decryptTaskContent(encrypted, newIdentityCode);
+    if (verified.title !== task.title || verified.details !== task.details) throw new Error("待办重新加密校验失败，请重试");
+    return { id: task.id, title: encrypted.title, details: encrypted.details, updatedAt: task.updated_at };
+  }));
+  return { newIdentityCode, tasks: migratedTasks };
 }
 
 function openAuth(mode = "login") {
@@ -477,14 +470,15 @@ async function submitAuthentication() {
       }
     } else if (mode === "reset") {
       response = await api("/api/auth/reset", { method: "POST", body: JSON.stringify({ username, resetCode, newPassword: password }) });
+    } else if (mode === "upgrade") {
+      const submitButton = document.querySelector('[data-action="submit-auth"]');
+      if (submitButton) submitButton.textContent = "正在安全迁移待办…";
+      const migration = await prepareLegacyUpgrade(legacyIdentityCode, username);
+      response = await api("/api/auth/upgrade", { method: "POST", body: JSON.stringify({ identityCode: legacyIdentityCode, username, password, ...migration }) });
     } else {
-      const salt = randomBase64(16);
-      const seed = mode === "upgrade" ? legacyIdentityCode : randomBase64(32);
-      const payload = { username, password, vaultSalt: salt, passwordWrappedSeed: await wrapEncryptionSeed(seed, password, salt), encryptionSeed: seed };
-      if (mode === "upgrade") payload.identityCode = seed;
-      response = await api(mode === "upgrade" ? "/api/auth/upgrade" : "/api/auth/register", { method: "POST", body: JSON.stringify(payload) });
+      response = await api("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password }) });
     }
-    await enterAccount(response.account, password);
+    await enterAccount(response.account);
   } catch (error) {
     if (mode === "login") {
       state.authPassword = "";
@@ -762,7 +756,46 @@ function profilePage() {
   return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span>${passwordForm}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
 }
 
+function taskScrollContainer() {
+  const taskScroller = app.querySelector(".workspace-tasks");
+  if (taskScroller && getComputedStyle(taskScroller).overflowY !== "visible") return taskScroller;
+  return app.querySelector(".content-scroll");
+}
+
+function captureTaskScroll() {
+  const workspace = app.querySelector(".workspace");
+  if (!workspace
+    || workspace.dataset.view !== state.view
+    || workspace.dataset.tag !== state.tag
+    || workspace.dataset.color !== state.color) return null;
+  const scroller = taskScrollContainer();
+  if (!scroller) return null;
+  const snapshot = { scrollTop: scroller.scrollTop, taskId: null, anchorOffset: 0 };
+  if (snapshot.scrollTop <= 1) return snapshot;
+  const scrollerRect = scroller.getBoundingClientRect();
+  const anchor = [...workspace.querySelectorAll(".task-card")]
+    .find((card) => card.getBoundingClientRect().bottom > scrollerRect.top + 1);
+  if (anchor) {
+    snapshot.taskId = Number(anchor.dataset.taskId);
+    snapshot.anchorOffset = anchor.getBoundingClientRect().top - scrollerRect.top;
+  }
+  return snapshot;
+}
+
+function restoreTaskScroll(snapshot) {
+  if (!snapshot) return;
+  const scroller = taskScrollContainer();
+  if (!scroller) return;
+  scroller.scrollTop = snapshot.scrollTop;
+  if (snapshot.taskId === null) return;
+  const anchor = app.querySelector(`.task-card[data-task-id="${snapshot.taskId}"]`);
+  if (!anchor) return;
+  const offset = anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+  scroller.scrollTop += offset - snapshot.anchorOffset;
+}
+
 function render() {
+  const scrollSnapshot = captureTaskScroll();
   persistentAvatar = app.querySelector(".avatar") || persistentAvatar;
   persistentProfileIcon = app.querySelector(".profile-icon") || persistentProfileIcon;
   persistentIdentitySymbol = app.querySelector(".identity-symbol") || persistentIdentitySymbol;
@@ -772,8 +805,8 @@ function render() {
   const overviewContent = `${pageHeader(heading)}${filters()}`;
   const pageContent = state.view === "profile"
     ? profilePage()
-    : `<section class="workspace workspace-${state.view}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}<p class="task-encryption-note"><i>🔒</i>任务内容已加密存储</p></main></section>`;
-  app.innerHTML = `<section class="phone"><div class="content-scroll">${pageContent}</div>
+    : `<section class="workspace workspace-${state.view}" data-view="${state.view}" data-tag="${escapeHtml(state.tag)}" data-color="${escapeHtml(state.color)}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}<p class="task-encryption-note"><i>🔒</i>任务内容已加密存储</p></main></section>`;
+  app.innerHTML = `<section class="phone"><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
     ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
@@ -786,6 +819,7 @@ function render() {
   const nextIdentitySymbol = app.querySelector(".identity-symbol");
   if (persistentIdentitySymbol && nextIdentitySymbol && persistentIdentitySymbol !== nextIdentitySymbol) nextIdentitySymbol.replaceWith(persistentIdentitySymbol);
   else if (nextIdentitySymbol) persistentIdentitySymbol = nextIdentitySymbol;
+  restoreTaskScroll(scrollSnapshot);
 }
 
 function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "", pinned: false, pinned_at: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned) }; state.datePicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
@@ -843,7 +877,7 @@ function updateDragGhost(pointerX, pointerY) {
 }
 
 function autoScrollDuringDrag(pointerY) {
-  const scroller = app.querySelector(".content-scroll");
+  const scroller = taskScrollContainer();
   if (!scroller) return;
   const rect = scroller.getBoundingClientRect();
   const edge = Math.min(76, rect.height * .16);
@@ -1097,10 +1131,9 @@ app.addEventListener("submit", async (event) => {
       const currentPassword = document.querySelector("#current-password").value;
       const newPassword = document.querySelector("#new-password").value;
       if (newPassword !== document.querySelector("#new-password-confirm").value) throw new Error("两次输入的新密码不一致");
-      const salt = randomBase64(16);
-      const response = await api("/api/auth/password", { method: "POST", body: JSON.stringify({ currentPassword, newPassword, vaultSalt: salt, passwordWrappedSeed: await wrapEncryptionSeed(state.encryptionSeed, newPassword, salt) }) });
+      const response = await api("/api/auth/password", { method: "POST", body: JSON.stringify({ currentPassword, newPassword }) });
       state.passwordDialog = false;
-      await enterAccount(response.account, newPassword);
+      await enterAccount(response.account);
       return;
     }
     if (event.target.id === "task-form") {
