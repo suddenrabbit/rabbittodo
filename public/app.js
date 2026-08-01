@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260801.205504";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v45";
+const APP_VERSION = "v20260801.221826";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v47";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -234,7 +234,7 @@ function synchronizeForeground() {
   foregroundSyncPromise = (async () => {
     // Update checks must happen before remote sync, but never delay local rendering.
     await checkForServiceWorkerUpdate({ force: true });
-    if (!state.updateReady && !state.updateApplying && await refreshSessionLease()) await flushOutboxAndLoad();
+    if (!state.updateApplying && await refreshSessionLease()) await flushOutboxAndLoad();
   })().finally(() => { foregroundSyncPromise = null; });
   return foregroundSyncPromise;
 }
@@ -406,11 +406,19 @@ function datePicker() {
 }
 
 async function api(path, options = {}) {
-  const { decrypt = true, ...fetchOptions } = options;
-  const response = await fetch(path, {
-    ...fetchOptions,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-  });
+  const { decrypt = true, timeoutMs = 0, ...fetchOptions } = options;
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : 0;
+  let response;
+  try {
+    response = await fetch(path, {
+      ...fetchOptions,
+      signal: controller?.signal || fetchOptions.signal,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
   const payload = await response.json();
   if (!response.ok) {
     const error = new Error(payload.error || "操作未完成");
@@ -594,11 +602,41 @@ function outbox() {
   return localProfile?.outbox || [];
 }
 
-async function enqueueTaskMutation(kind, payload = {}) {
+async function enqueueTaskMutation(kind, payload = {}, entry = null) {
   if (!localProfile) localProfile = currentLocalSnapshot();
-  localProfile.outbox = [...outbox(), { id: mutationId(), kind, payload, createdAt: Date.now() }];
+  localProfile.outbox = [...outbox(), entry || { id: mutationId(), kind, payload, createdAt: Date.now() }];
   await persistLocalSnapshot();
   scheduleOutboxSync(0);
+}
+
+function markMutationUnsynced(entry, unsynced) {
+  if (entry.kind !== "create" && entry.kind !== "update") return;
+  const task = state.tasks.find((item) => item.id === Number(entry.payload.localId));
+  if (task) task._unsynced = unsynced;
+}
+
+async function publishTaskMutation(kind, payload = {}) {
+  const entry = { id: mutationId(), kind, payload, createdAt: Date.now() };
+  if (navigator.onLine && !outbox().length) {
+    pendingMutations += 1;
+    try {
+      const sent = await sendOutboxEntry(entry, { timeoutMs: 8_000 });
+      if (sent) {
+        markMutationUnsynced(entry, false);
+        await persistLocalSnapshot();
+        render();
+        return true;
+      }
+    } catch (error) {
+      if (handleAuthenticationError(error)) throw error;
+    } finally {
+      pendingMutations -= 1;
+    }
+  }
+  markMutationUnsynced(entry, true);
+  await enqueueTaskMutation(kind, payload, entry);
+  render();
+  return false;
 }
 
 function scheduleOutboxSync(delay = 0) {
@@ -609,45 +647,46 @@ function scheduleOutboxSync(delay = 0) {
   }, delay);
 }
 
-async function sendOutboxEntry(entry) {
+async function sendOutboxEntry(entry, { timeoutMs = 0 } = {}) {
+  const requestOptions = timeoutMs ? { timeoutMs } : {};
   const localId = Number(entry.payload.localId);
   const resolvedId = resolvedTaskId(localId);
   if (entry.kind !== "create" && (!resolvedId || resolvedId < 0)) return false;
   if (entry.kind === "create") {
-    const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(entry.payload.task), headers: { "X-RabbitTodo-Mutation": entry.id } });
+    const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(entry.payload.task), headers: { "X-RabbitTodo-Mutation": entry.id }, ...requestOptions });
     applyServerTask(response.task, localId, false);
     return true;
   }
   if (entry.kind === "update") {
-    const response = await api(`/api/tasks/${resolvedId}`, { method: "PUT", body: JSON.stringify(entry.payload.task) });
+    const response = await api(`/api/tasks/${resolvedId}`, { method: "PUT", body: JSON.stringify(entry.payload.task), ...requestOptions });
     applyServerTask(response.task, localId, false);
     return true;
   }
   if (entry.kind === "toggle") {
-    const response = await api(`/api/tasks/${resolvedId}`, { method: "PATCH", body: JSON.stringify({ completed: entry.payload.completed }) });
+    const response = await api(`/api/tasks/${resolvedId}`, { method: "PATCH", body: JSON.stringify({ completed: entry.payload.completed }), ...requestOptions });
     applyServerTask(response.task, localId, false);
     return true;
   }
   if (entry.kind === "delete") {
-    await api(`/api/tasks/${resolvedId}`, { method: "DELETE" });
+    await api(`/api/tasks/${resolvedId}`, { method: "DELETE", ...requestOptions });
     return true;
   }
   if (entry.kind === "reorder") {
     const ids = entry.payload.ids.map((id) => resolvedTaskId(id));
     const pinnedIds = entry.payload.pinnedIds.map((id) => resolvedTaskId(id));
     if (ids.some((id) => id < 0) || pinnedIds.some((id) => id < 0)) return false;
-    await api("/api/tasks/reorder", { method: "POST", body: JSON.stringify({ ...entry.payload, ids, pinnedIds }) });
+    await api("/api/tasks/reorder", { method: "POST", body: JSON.stringify({ ...entry.payload, ids, pinnedIds }), ...requestOptions });
     return true;
   }
   throw new Error("本地同步操作无效");
 }
 
 async function flushOutbox() {
-  if (outboxSyncPromise || !state.identity || state.updateReady || state.updateApplying || !navigator.onLine || !outbox().length) return outboxSyncPromise;
+  if (outboxSyncPromise || !state.identity || state.updateApplying || !navigator.onLine || !outbox().length) return outboxSyncPromise;
   outboxSyncPromise = (async () => {
     pendingMutations += 1;
     try {
-      while (outbox().length && !state.updateReady && !state.updateApplying) {
+      while (outbox().length && !state.updateApplying) {
         const entry = outbox()[0];
         const sent = await sendOutboxEntry(entry);
         if (!sent) return;
@@ -670,7 +709,7 @@ async function flushOutbox() {
 
 async function flushOutboxAndLoad() {
   await flushOutbox();
-  if (!outbox().length && !state.updateReady && !state.updateApplying) await loadTasks({ quiet: true });
+  if (!outbox().length && !state.updateApplying) await loadTasks({ quiet: true });
 }
 
 // Legacy plaintext re-encryption remains best-effort and does not enter the task outbox.
@@ -686,7 +725,7 @@ function resolvedTaskId(id) {
 function applyServerTask(task, localId = task.id, shouldRender = false) {
   if (Number(localId) < 0) taskIdAliases.set(Number(localId), task.id);
   const index = state.tasks.findIndex((item) => item.id === Number(localId) || item.id === task.id);
-  if (index >= 0) state.tasks[index] = { ...state.tasks[index], ...task };
+  if (index >= 0) state.tasks[index] = { ...state.tasks[index], ...task, _unsynced: false };
   if (shouldRender) render();
 }
 
@@ -727,7 +766,7 @@ async function loadTasks({ quiet = false } = {}) {
 }
 
 function refreshActiveTasks(force = false) {
-  if (!state.identity || state.authPromptOpen || state.editor || pointerDrag || pendingMutations || serviceWorkerUpdatePromise || foregroundSyncPromise || state.updateReady || state.updateApplying || document.visibilityState === "hidden") return;
+  if (!state.identity || state.authPromptOpen || state.editor || pointerDrag || pendingMutations || serviceWorkerUpdatePromise || foregroundSyncPromise || state.updateApplying || document.visibilityState === "hidden") return;
   // pageshow、focus 与 visibilitychange 往往会连续触发；前台恢复只保留一次读取。
   const interval = force ? 1_500 : 30_000;
   if (Date.now() - lastTaskSyncAt > interval) flushOutboxAndLoad();
@@ -806,11 +845,12 @@ function taskCard(task) {
   const distanceBadge = dueDistanceBadge(task);
   const completionDate = completedDate(task);
   const due = task.due_date ? `<span class="due"><i class="due-icon">◷</i><span class="due-label">${dateLabel(task.due_date)}</span></span>` : "";
+  const syncBadge = task._unsynced ? '<span class="sync-badge">未同步</span>' : "";
   return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : ""} ${overdue ? "is-overdue" : ""} ${showPinned ? "is-pinned" : ""}" data-task-id="${task.id}">
     <button class="drag-handle" data-action="drag" data-id="${task.id}" aria-label="拖动调整顺序">⠿</button>
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
     <div class="task-body"><h3>${escapeHtml(task.title)}</h3><div class="task-meta">
-      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${completionDate}${distanceBadge}${statusBadge}${due}
+      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${completionDate}${distanceBadge}${statusBadge}${due}${syncBadge}
       ${task.tags.map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}
     </div></div><i class="task-color-dot ${showPinned ? "is-star" : ""}" ${showPinned ? 'aria-label="已置顶"' : ""}>${showPinned ? "★" : ""}</i>
   </article>`;
@@ -1317,9 +1357,8 @@ app.addEventListener("submit", async (event) => {
         }
         state.editor = null;
         render();
-        await persistLocalSnapshot();
         const encryptedPayload = await encryptTaskContent(payload);
-        await enqueueTaskMutation("update", { localId: editingId, task: encryptedPayload });
+        await publishTaskMutation("update", { localId: editingId, task: encryptedPayload });
       } else {
         const temporaryId = nextTemporaryTaskId--;
         const pinnedAt = payload.pinned ? new Date().toISOString() : null;
@@ -1331,9 +1370,8 @@ app.addEventListener("submit", async (event) => {
         state.editor = null;
         state.view = "todo";
         render();
-        await persistLocalSnapshot();
         const encryptedPayload = await encryptTaskContent(payload);
-        await enqueueTaskMutation("create", { localId: temporaryId, task: encryptedPayload });
+        await publishTaskMutation("create", { localId: temporaryId, task: encryptedPayload });
       }
       return;
     }

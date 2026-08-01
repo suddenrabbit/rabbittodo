@@ -210,7 +210,8 @@
 .task-meta:has(.task-details) > .overdue-badge,
 .task-meta:has(.task-details) > .due-distance-badge,
 .task-meta:has(.task-details) > .completed-date,
-.task-meta:has(.task-details) > .status-badge {
+.task-meta:has(.task-details) > .status-badge,
+.task-meta:has(.task-details) > .sync-badge {
   margin-right: 6px;
 }
 
@@ -226,6 +227,7 @@
 
 .status-badge.in_progress { background: #e4edff; color: #5274bf; }
 .status-badge.paused { background: #eeecf3; color: #787582; }
+.sync-badge { display: inline-block; padding: 2px 5px; border-radius: 5px; background: #fff0dc; color: #b36b1d; font-weight: 700; line-height: 1.3; vertical-align: 1px; }
 
 .due-distance-badge {
   display: inline-block;
