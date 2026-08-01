@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260801.221826";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v47";
+const APP_VERSION = "v20260801.225457";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v49";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -142,6 +142,7 @@ async function restoreLocalSnapshot() {
     nextTemporaryTaskId = Number(profile.nextTemporaryTaskId) || -1;
     taskIdAliases.clear();
     (Array.isArray(profile.aliases) ? profile.aliases : []).forEach(([from, to]) => taskIdAliases.set(Number(from), Number(to)));
+    markQueuedTasksUnsynced();
     encryptionKeyIdentity = "";
     encryptionKeyPromise = null;
     render();
@@ -191,7 +192,7 @@ function watchServiceWorkerInstallation(registration) {
 }
 
 function checkForServiceWorkerUpdate({ force = false } = {}) {
-  if (!serviceWorkerRegistration || document.visibilityState === "hidden" || !navigator.onLine) return Promise.resolve();
+  if (!serviceWorkerRegistration || document.visibilityState === "hidden") return Promise.resolve();
   const now = Date.now();
   const lastCheck = Number(sessionStorage.getItem(SERVICE_WORKER_CHECK_KEY) || 0);
   if (serviceWorkerUpdatePromise) return serviceWorkerUpdatePromise;
@@ -602,6 +603,23 @@ function outbox() {
   return localProfile?.outbox || [];
 }
 
+function isTransportFailure(error) {
+  return !Number(error?.status);
+}
+
+function markQueuedTasksUnsynced() {
+  outbox().forEach((entry) => markMutationUnsynced(entry, true));
+}
+
+function removeOutboxEntry(entryId) {
+  if (!localProfile) return;
+  localProfile.outbox = outbox().filter((entry) => entry.id !== entryId);
+}
+
+function queuedCreateFor(localId) {
+  return outbox().find((entry) => entry.kind === "create" && Number(entry.payload.localId) === Number(localId));
+}
+
 async function enqueueTaskMutation(kind, payload = {}, entry = null) {
   if (!localProfile) localProfile = currentLocalSnapshot();
   localProfile.outbox = [...outbox(), entry || { id: mutationId(), kind, payload, createdAt: Date.now() }];
@@ -616,25 +634,38 @@ function markMutationUnsynced(entry, unsynced) {
 }
 
 async function publishTaskMutation(kind, payload = {}) {
-  const entry = { id: mutationId(), kind, payload, createdAt: Date.now() };
-  if (navigator.onLine && !outbox().length) {
-    pendingMutations += 1;
-    try {
-      const sent = await sendOutboxEntry(entry, { timeoutMs: 8_000 });
-      if (sent) {
-        markMutationUnsynced(entry, false);
-        await persistLocalSnapshot();
-        render();
-        return true;
+  // A previously failed write must never prevent a new real request. For an
+  // unsynced temporary task, update and retry its original idempotent create.
+  const pendingCreate = kind === "update" && Number(payload.localId) < 0 ? queuedCreateFor(payload.localId) : null;
+  const entry = pendingCreate || { id: mutationId(), kind, payload, createdAt: Date.now() };
+  if (pendingCreate) entry.payload.task = payload.task;
+  pendingMutations += 1;
+  try {
+    const sent = await sendOutboxEntry(entry, { timeoutMs: 8_000 });
+    if (sent) {
+      removeOutboxEntry(entry.id);
+      if (kind === "update") {
+        localProfile.outbox = outbox().filter((item) => item.kind !== "update" || Number(item.payload.localId) !== Number(payload.localId));
       }
-    } catch (error) {
-      if (handleAuthenticationError(error)) throw error;
-    } finally {
-      pendingMutations -= 1;
+      markMutationUnsynced(entry, false);
+      outboxRetryAttempt = 0;
+      await persistLocalSnapshot();
+      render();
+      return true;
     }
+  } catch (error) {
+    if (handleAuthenticationError(error)) throw error;
+    if (!isTransportFailure(error)) throw error;
+  } finally {
+    pendingMutations -= 1;
   }
   markMutationUnsynced(entry, true);
-  await enqueueTaskMutation(kind, payload, entry);
+  if (pendingCreate) {
+    await persistLocalSnapshot();
+    scheduleOutboxSync(0);
+  } else {
+    await enqueueTaskMutation(kind, payload, entry);
+  }
   render();
   return false;
 }
@@ -682,22 +713,28 @@ async function sendOutboxEntry(entry, { timeoutMs = 0 } = {}) {
 }
 
 async function flushOutbox() {
-  if (outboxSyncPromise || !state.identity || state.updateApplying || !navigator.onLine || !outbox().length) return outboxSyncPromise;
+  if (outboxSyncPromise || !state.identity || state.updateApplying || !outbox().length) return outboxSyncPromise;
   outboxSyncPromise = (async () => {
     pendingMutations += 1;
     try {
       while (outbox().length && !state.updateApplying) {
         const entry = outbox()[0];
-        const sent = await sendOutboxEntry(entry);
-        if (!sent) return;
-        localProfile.outbox = outbox().slice(1);
+        const sent = await sendOutboxEntry(entry, { timeoutMs: 8_000 });
+        if (!sent) {
+          scheduleOutboxSync(SYNC_RETRY_DELAYS[Math.min(outboxRetryAttempt++, SYNC_RETRY_DELAYS.length - 1)]);
+          return;
+        }
+        removeOutboxEntry(entry.id);
+        markMutationUnsynced(entry, false);
         outboxRetryAttempt = 0;
         await persistLocalSnapshot();
       }
     } catch (error) {
       if (handleAuthenticationError(error)) return;
-      const delay = SYNC_RETRY_DELAYS[Math.min(outboxRetryAttempt++, SYNC_RETRY_DELAYS.length - 1)];
-      scheduleOutboxSync(delay);
+      if (isTransportFailure(error)) {
+        const delay = SYNC_RETRY_DELAYS[Math.min(outboxRetryAttempt++, SYNC_RETRY_DELAYS.length - 1)];
+        scheduleOutboxSync(delay);
+      }
     } finally {
       pendingMutations -= 1;
       outboxSyncPromise = null;
@@ -709,7 +746,7 @@ async function flushOutbox() {
 
 async function flushOutboxAndLoad() {
   await flushOutbox();
-  if (!outbox().length && !state.updateApplying) await loadTasks({ quiet: true });
+  if (!state.updateApplying) await loadTasks({ quiet: true });
 }
 
 // Legacy plaintext re-encryption remains best-effort and does not enter the task outbox.
@@ -727,6 +764,22 @@ function applyServerTask(task, localId = task.id, shouldRender = false) {
   const index = state.tasks.findIndex((item) => item.id === Number(localId) || item.id === task.id);
   if (index >= 0) state.tasks[index] = { ...state.tasks[index], ...task, _unsynced: false };
   if (shouldRender) render();
+}
+
+function mergeRemoteTasks(remoteTasks) {
+  const localTasks = new Map(state.tasks.map((task) => [Number(task.id), task]));
+  const merged = new Map(remoteTasks.map((task) => [Number(task.id), task]));
+  outbox().forEach((entry) => {
+    const localId = Number(entry.payload.localId);
+    const task = localTasks.get(localId);
+    if (entry.kind === "delete") {
+      merged.delete(resolvedTaskId(localId));
+      return;
+    }
+    if (!task || !["create", "update", "toggle"].includes(entry.kind)) return;
+    merged.set(localId, { ...task, _unsynced: true });
+  });
+  return [...merged.values()];
 }
 
 function migrateLegacyTaskContent(tasks) {
@@ -751,8 +804,8 @@ async function loadTasks({ quiet = false } = {}) {
   if (taskSyncPromise) return taskSyncPromise;
   taskSyncPromise = (async () => {
     try {
-      state.tasks = (await api("/api/tasks")).tasks;
-      migrateLegacyTaskContent(state.tasks.filter((task) => !task._contentEncrypted));
+      state.tasks = mergeRemoteTasks((await api("/api/tasks")).tasks);
+      migrateLegacyTaskContent(state.tasks.filter((task) => task.id > 0 && !task._contentEncrypted));
       lastTaskSyncAt = Date.now();
       await persistLocalSnapshot();
     } catch (error) {
@@ -1351,6 +1404,7 @@ app.addEventListener("submit", async (event) => {
       const editingId = Number(state.editor.id || 0);
       if (editingId) {
         const localTask = state.tasks.find((task) => task.id === editingId);
+        const previousTask = localTask ? { ...localTask, tags: [...localTask.tags] } : null;
         if (localTask) {
           const pinnedAt = payload.pinned ? (localTask.pinned ? localTask.pinned_at : new Date().toISOString()) : null;
           Object.assign(localTask, { title, details, color: payload.color, status: payload.status, tags, due_date: dueDate, pinned: payload.pinned, pinned_at: pinnedAt });
@@ -1358,7 +1412,16 @@ app.addEventListener("submit", async (event) => {
         state.editor = null;
         render();
         const encryptedPayload = await encryptTaskContent(payload);
-        await publishTaskMutation("update", { localId: editingId, task: encryptedPayload });
+        try {
+          await publishTaskMutation("update", { localId: editingId, task: encryptedPayload });
+        } catch (error) {
+          if (previousTask && state.identity) {
+            const index = state.tasks.findIndex((task) => task.id === editingId);
+            if (index >= 0) state.tasks[index] = previousTask;
+            render();
+          }
+          throw error;
+        }
       } else {
         const temporaryId = nextTemporaryTaskId--;
         const pinnedAt = payload.pinned ? new Date().toISOString() : null;
@@ -1371,7 +1434,15 @@ app.addEventListener("submit", async (event) => {
         state.view = "todo";
         render();
         const encryptedPayload = await encryptTaskContent(payload);
-        await publishTaskMutation("create", { localId: temporaryId, task: encryptedPayload });
+        try {
+          await publishTaskMutation("create", { localId: temporaryId, task: encryptedPayload });
+        } catch (error) {
+          if (state.identity) {
+            state.tasks = state.tasks.filter((task) => task.id !== temporaryId);
+            render();
+          }
+          throw error;
+        }
       }
       return;
     }
