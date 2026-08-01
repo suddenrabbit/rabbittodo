@@ -1,10 +1,11 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260801.225457";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v49";
+const APP_VERSION = "v20260802.000951";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v55";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
+const TOUCH_DRAG_HOLD_MS = 350;
 const LOCAL_STORE_NAME = "rabbittodo-local-v1";
 const LOCAL_STORE_KEY = "active-account";
 const SYNC_RETRY_DELAYS = [5_000, 30_000, 120_000, 600_000];
@@ -620,6 +621,13 @@ function queuedCreateFor(localId) {
   return outbox().find((entry) => entry.kind === "create" && Number(entry.payload.localId) === Number(localId));
 }
 
+// A task that has not received a server id is allowed to move temporarily in
+// the current view, but must not create a durable reorder record. Once its
+// create request succeeds, normal new-task ordering places it at the tail.
+function isPendingCreate(task) {
+  return Boolean(task && (Number(task.id) < 0 || queuedCreateFor(task.id)));
+}
+
 async function enqueueTaskMutation(kind, payload = {}, entry = null) {
   if (!localProfile) localProfile = currentLocalSnapshot();
   localProfile.outbox = [...outbox(), entry || { id: mutationId(), kind, payload, createdAt: Date.now() }];
@@ -712,13 +720,31 @@ async function sendOutboxEntry(entry, { timeoutMs = 0 } = {}) {
   throw new Error("本地同步操作无效");
 }
 
+function canSendOutboxEntry(entry) {
+  const localId = Number(entry.payload.localId);
+  if (entry.kind === "create") return true;
+  if (entry.kind === "reorder") {
+    const ids = Array.isArray(entry.payload.ids) ? entry.payload.ids : [];
+    const pinnedIds = Array.isArray(entry.payload.pinnedIds) ? entry.payload.pinnedIds : [];
+    return ids.length > 0 && [...ids, ...pinnedIds].every((id) => resolvedTaskId(id) > 0);
+  }
+  return resolvedTaskId(localId) > 0;
+}
+
 async function flushOutbox() {
   if (outboxSyncPromise || !state.identity || state.updateApplying || !outbox().length) return outboxSyncPromise;
   outboxSyncPromise = (async () => {
     pendingMutations += 1;
     try {
       while (outbox().length && !state.updateApplying) {
-        const entry = outbox()[0];
+        // Historic queues can contain an old reorder/update that still refers
+        // to a temporary id. It must not prevent later idempotent creates from
+        // being repaired automatically once the connection is available.
+        const entry = outbox().find(canSendOutboxEntry);
+        if (!entry) {
+          scheduleOutboxSync(SYNC_RETRY_DELAYS[Math.min(outboxRetryAttempt++, SYNC_RETRY_DELAYS.length - 1)]);
+          return;
+        }
         const sent = await sendOutboxEntry(entry, { timeoutMs: 8_000 });
         if (!sent) {
           scheduleOutboxSync(SYNC_RETRY_DELAYS[Math.min(outboxRetryAttempt++, SYNC_RETRY_DELAYS.length - 1)]);
@@ -778,6 +804,20 @@ function mergeRemoteTasks(remoteTasks) {
     }
     if (!task || !["create", "update", "toggle"].includes(entry.kind)) return;
     merged.set(localId, { ...task, _unsynced: true });
+  });
+  outbox().filter((entry) => entry.kind === "reorder").forEach((entry) => {
+    entry.payload.ids.forEach((id) => {
+      const localId = Number(id);
+      const localTask = localTasks.get(localId);
+      const remoteTask = merged.get(resolvedTaskId(localId));
+      if (!localTask || !remoteTask) return;
+      merged.set(remoteTask.id, {
+        ...remoteTask,
+        manual_position: localTask.manual_position,
+        pinned: localTask.pinned,
+        pinned_at: localTask.pinned_at,
+      });
+    });
   });
   return [...merged.values()];
 }
@@ -855,34 +895,16 @@ function compareManualPosition(left, right) {
   return 0;
 }
 
-function comparePinnedAndManual(left, right) {
-  if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
-  return compareManualPosition(left, right);
-}
-
 function compareTodoTasks(left, right) {
-  const pinnedAndManualOrder = comparePinnedAndManual(left, right);
-  if (pinnedAndManualOrder) return pinnedAndManualOrder;
-  if (left.pinned && right.pinned) {
-    const pinnedOrder = timestampValue(right.pinned_at) - timestampValue(left.pinned_at);
-    if (pinnedOrder) return pinnedOrder;
-  }
-  if (Boolean(left.due_date) !== Boolean(right.due_date)) return left.due_date ? -1 : 1;
-  if (left.due_date && right.due_date) {
-    const dateOrder = left.due_date.localeCompare(right.due_date);
-    if (dateOrder) return dateOrder;
-  }
-  const statusRank = { in_progress: 0, none: 1, paused: 2 };
-  const statusOrder = (statusRank[left.status || "none"] ?? 1) - (statusRank[right.status || "none"] ?? 1);
-  if (statusOrder) return statusOrder;
-  const createdOrder = timestampValue(right.created_at) - timestampValue(left.created_at);
+  if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
+  const manualOrder = compareManualPosition(left, right);
+  if (manualOrder) return manualOrder;
+  const createdOrder = timestampValue(left.created_at) - timestampValue(right.created_at);
   if (createdOrder) return createdOrder;
-  return Number(right.id) - Number(left.id);
+  return Number(left.id) - Number(right.id);
 }
 
 function compareCompletedTasks(left, right) {
-  const manualOrder = compareManualPosition(left, right);
-  if (manualOrder) return manualOrder;
   const completedOrder = timestampValue(right.completed_at) - timestampValue(left.completed_at);
   if (completedOrder) return completedOrder;
   return Number(right.id) - Number(left.id);
@@ -899,8 +921,7 @@ function taskCard(task) {
   const completionDate = completedDate(task);
   const due = task.due_date ? `<span class="due"><i class="due-icon">◷</i><span class="due-label">${dateLabel(task.due_date)}</span></span>` : "";
   const syncBadge = task._unsynced ? '<span class="sync-badge">未同步</span>' : "";
-  return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : ""} ${overdue ? "is-overdue" : ""} ${showPinned ? "is-pinned" : ""}" data-task-id="${task.id}">
-    <button class="drag-handle" data-action="drag" data-id="${task.id}" aria-label="拖动调整顺序">⠿</button>
+  return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : "is-draggable"} ${overdue ? "is-overdue" : ""} ${showPinned ? "is-pinned" : ""}" data-task-id="${task.id}">
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
     <div class="task-body"><h3>${escapeHtml(task.title)}</h3><div class="task-meta">
       ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${completionDate}${distanceBadge}${statusBadge}${due}${syncBadge}
@@ -1062,7 +1083,7 @@ function render() {
   const overviewContent = `${pageHeader(heading)}${filters()}`;
   const pageContent = state.view === "profile"
     ? profilePage()
-    : `<section class="workspace workspace-${state.view}" data-view="${state.view}" data-tag="${escapeHtml(state.tag)}" data-color="${escapeHtml(state.color)}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}<p class="task-encryption-note"><i>🔒</i>任务内容已加密存储</p></main></section>`;
+    : `<section class="workspace workspace-${state.view}" data-view="${state.view}" data-tag="${escapeHtml(state.tag)}" data-color="${escapeHtml(state.color)}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}<p class="task-encryption-note"><i>🔒</i>待办事项内容均已加密存储</p></main></section>`;
   app.innerHTML = `<section class="phone"><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
     ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}${updatePrompt()}`;
   const nextAvatar = app.querySelector(".avatar");
@@ -1153,8 +1174,15 @@ function autoScrollDuringDrag(pointerY) {
   }
 }
 
+function clearPointerDragHold(drag = pointerDrag) {
+  if (!drag?.holdTimer) return;
+  clearTimeout(drag.holdTimer);
+  drag.holdTimer = 0;
+}
+
 function startPointerDrag(event) {
   if (!pointerDrag || pointerDrag.started) return;
+  clearPointerDragHold();
   const rect = pointerDrag.card.getBoundingClientRect();
   const ghost = pointerDrag.card.cloneNode(true);
   ghost.classList.add("task-drag-ghost");
@@ -1196,11 +1224,15 @@ function dragLayoutChanged(initial, current) {
 }
 
 function persistDraggedOrder() {
-  const { pinned: pinnedIds, regular: regularIds } = visibleDragLayout();
+  if (state.view !== "todo") return;
+  const isPendingId = (id) => isPendingCreate(state.tasks.find((task) => Number(task.id) === Number(id)));
+  const layout = visibleDragLayout();
+  const pinnedIds = layout.pinned.filter((id) => !isPendingId(id));
+  const regularIds = layout.regular.filter((id) => !isPendingId(id));
   const visibleIds = [...pinnedIds, ...regularIds];
   if (!visibleIds.length) return;
 
-  const baseline = pageTasksInDisplayOrder();
+  const baseline = pageTasksInDisplayOrder().filter((task) => !isPendingCreate(task));
   const visibleSet = new Set(visibleIds);
   const tasksById = new Map(baseline.map((task) => [Number(task.id), task]));
   let visibleIndex = 0;
@@ -1225,12 +1257,16 @@ function persistDraggedOrder() {
     completed: state.view === "done",
   };
   render();
-  persistLocalSnapshot().then(() => enqueueTaskMutation("reorder", payload)).catch((error) => alert(error.message));
+  // enqueueTaskMutation captures the already-updated task order and the queue
+  // in one IndexedDB snapshot, so an in-flight remote read cannot observe a
+  // reordered local list without also seeing its protection entry.
+  enqueueTaskMutation("reorder", payload).catch((error) => alert(error.message));
 }
 
 function finishPointerDrag(cancelled = false) {
   if (!pointerDrag) return;
   const drag = pointerDrag;
+  clearPointerDragHold(drag);
   const finalLayout = drag.started ? visibleDragLayout() : null;
   const changed = drag.started && dragLayoutChanged(drag.initialLayout, finalLayout);
   pointerDrag = null;
@@ -1245,31 +1281,46 @@ function finishPointerDrag(cancelled = false) {
     app.querySelector(".workspace-tasks")?.classList.remove("is-drag-active");
     app.querySelectorAll("[data-task-zone]").forEach((list) => list.classList.remove("is-drop-target"));
     if (cancelled) render();
-    else if (changed) persistDraggedOrder();
+    else if (changed && !isPendingCreate(state.tasks.find((task) => Number(task.id) === Number(drag.card.dataset.taskId)))) persistDraggedOrder();
   }
 }
 
 app.addEventListener("pointerdown", (event) => {
-  const handle = event.target.closest('[data-action="drag"]');
-  if (!handle || event.button !== 0 || pendingMutations || state.editor) return;
-  const card = handle.closest(".task-card");
-  if (!card || Number(card.dataset.taskId) < 0) return;
-  pointerDrag = {
+  if (state.view !== "todo" || event.button !== 0 || pendingMutations || state.editor) return;
+  if (event.target.closest("button, input, textarea, select, label, a, [data-action]")) return;
+  const card = event.target.closest(".task-card.is-draggable");
+  if (!card) return;
+  const drag = pointerDrag = {
     pointerId: event.pointerId,
     card,
-    handle,
     startX: event.clientX,
     startY: event.clientY,
+    pointerType: event.pointerType,
     initialLayout: visibleDragLayout(),
     started: false,
     ghost: null,
   };
-  handle.setPointerCapture?.(event.pointerId);
+  if (event.pointerType === "mouse") {
+    card.setPointerCapture?.(event.pointerId);
+  } else {
+    drag.holdTimer = setTimeout(() => {
+      if (pointerDrag !== drag || drag.started) return;
+      card.setPointerCapture?.(drag.pointerId);
+      startPointerDrag({ clientX: drag.startX, clientY: drag.startY });
+    }, TOUCH_DRAG_HOLD_MS);
+  }
 });
 
 window.addEventListener("pointermove", (event) => {
   if (!pointerDrag || event.pointerId !== pointerDrag.pointerId) return;
   const distance = Math.hypot(event.clientX - pointerDrag.startX, event.clientY - pointerDrag.startY);
+  if (!pointerDrag.started && pointerDrag.pointerType !== "mouse") {
+    if (distance >= 8) {
+      clearPointerDragHold();
+      pointerDrag = null;
+    }
+    return;
+  }
   if (!pointerDrag.started && distance < 4) return;
   event.preventDefault();
   startPointerDrag(event);
@@ -1464,7 +1515,10 @@ window.addEventListener("online", () => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") synchronizeForeground();
 });
-setInterval(() => refreshActiveTasks(), 30_000);
+setInterval(() => {
+  refreshActiveTasks();
+  if (state.identity && !state.authPromptOpen && !state.updateApplying && document.visibilityState !== "hidden" && outbox().length) flushOutboxAndLoad();
+}, 30_000);
 
 async function restoreSession() {
   const rememberedUsername = state.username || localProfile?.username || "";
