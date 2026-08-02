@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260802.183945";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v57";
+const APP_VERSION = "v20260802.233945";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v58";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -40,6 +40,7 @@ let localProfile = null;
 let outboxSyncPromise = null;
 let outboxRetryTimer = 0;
 let outboxRetryAttempt = 0;
+let syncNoticeTimer = 0;
 const preventPageZoom = (event) => {
   if (event.type.startsWith("gesture") || event.touches?.length > 1) event.preventDefault();
 };
@@ -68,6 +69,7 @@ const state = {
   authError: "", authUsername: "", authPassword: "", authConfirm: "", authResetCode: "", identityDraft: "",
   passwordDialog: false, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
   updateReady: false, updateApplying: false,
+  syncStatus: "idle", syncError: "", syncCount: 0,
 };
 
 updateViewportClasses();
@@ -604,6 +606,42 @@ function outbox() {
   return localProfile?.outbox || [];
 }
 
+function queuedTaskCount() {
+  const taskIds = new Set();
+  outbox().forEach((entry) => {
+    if (["create", "update", "toggle", "delete"].includes(entry.kind)) {
+      const id = Number(entry.payload.localId);
+      if (Number.isFinite(id)) taskIds.add(id);
+      return;
+    }
+    if (entry.kind === "reorder") {
+      (Array.isArray(entry.payload.ids) ? entry.payload.ids : []).forEach((id) => {
+        const taskId = Number(id);
+        if (Number.isFinite(taskId)) taskIds.add(taskId);
+      });
+    }
+  });
+  return taskIds.size;
+}
+
+function setSyncStatus(status, error = "") {
+  state.syncStatus = status;
+  state.syncError = error;
+  if (status === "syncing") state.syncCount = queuedTaskCount();
+  else if (status === "failed") state.syncCount = queuedTaskCount();
+  else if (status === "idle") state.syncCount = 0;
+  if (syncNoticeTimer) clearTimeout(syncNoticeTimer);
+  if (status === "success") {
+    syncNoticeTimer = setTimeout(() => {
+      syncNoticeTimer = 0;
+      if (!outbox().length) {
+        state.syncStatus = "idle";
+        render();
+      }
+    }, 1_800);
+  }
+}
+
 function isTransportFailure(error) {
   return !Number(error?.status);
 }
@@ -631,6 +669,7 @@ function isPendingCreate(task) {
 async function enqueueTaskMutation(kind, payload = {}, entry = null) {
   if (!localProfile) localProfile = currentLocalSnapshot();
   localProfile.outbox = [...outbox(), entry || { id: mutationId(), kind, payload, createdAt: Date.now() }];
+  setSyncStatus("idle");
   await persistLocalSnapshot();
   scheduleOutboxSync(0);
 }
@@ -690,7 +729,10 @@ async function sendOutboxEntry(entry, { timeoutMs = 0 } = {}) {
   const requestOptions = timeoutMs ? { timeoutMs } : {};
   const localId = Number(entry.payload.localId);
   const resolvedId = resolvedTaskId(localId);
-  if (entry.kind !== "create" && (!resolvedId || resolvedId < 0)) return false;
+  // Reorder entries describe a complete list and deliberately have no localId.
+  // Treating them as a single-task mutation made every queued sort return false
+  // here, leaving it at the head of the outbox forever.
+  if (entry.kind !== "create" && entry.kind !== "reorder" && (!resolvedId || resolvedId < 0)) return false;
   if (entry.kind === "create") {
     const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(entry.payload.task), headers: { "X-RabbitTodo-Mutation": entry.id }, ...requestOptions });
     applyServerTask(response.task, localId, false);
@@ -711,8 +753,24 @@ async function sendOutboxEntry(entry, { timeoutMs = 0 } = {}) {
     return true;
   }
   if (entry.kind === "reorder") {
-    const ids = entry.payload.ids.map((id) => resolvedTaskId(id));
-    const pinnedIds = entry.payload.pinnedIds.map((id) => resolvedTaskId(id));
+    const remoteTasks = (await api("/api/tasks", requestOptions)).tasks;
+    const completed = Boolean(entry.payload.completed);
+    const visibleRemoteTasks = remoteTasks.filter((task) => Boolean(task.completed) === completed);
+    const remoteById = new Map(visibleRemoteTasks.map((task) => [Number(task.id), task]));
+    const requestedPins = new Set((entry.payload.pinnedIds || []).map((id) => resolvedTaskId(id)));
+    const requestedIds = [...new Set(entry.payload.ids.map((id) => resolvedTaskId(id)))]
+      .filter((id) => remoteById.has(id));
+    const requestedSet = new Set(requestedIds);
+    const requestedTasks = requestedIds.map((id) => remoteById.get(id));
+    const missingTasks = visibleRemoteTasks.filter((task) => !requestedSet.has(Number(task.id)));
+    const orderedTasks = [
+      ...requestedTasks.filter((task) => requestedPins.has(Number(task.id))),
+      ...missingTasks.filter((task) => task.pinned),
+      ...requestedTasks.filter((task) => !requestedPins.has(Number(task.id))),
+      ...missingTasks.filter((task) => !task.pinned),
+    ];
+    const ids = orderedTasks.map((task) => Number(task.id));
+    const pinnedIds = orderedTasks.filter((task) => requestedSet.has(Number(task.id)) ? requestedPins.has(Number(task.id)) : task.pinned).map((task) => Number(task.id));
     if (ids.some((id) => id < 0) || pinnedIds.some((id) => id < 0)) return false;
     await api("/api/tasks/reorder", { method: "POST", body: JSON.stringify({ ...entry.payload, ids, pinnedIds }), ...requestOptions });
     return true;
@@ -725,8 +783,9 @@ function canSendOutboxEntry(entry) {
   if (entry.kind === "create") return true;
   if (entry.kind === "reorder") {
     const ids = Array.isArray(entry.payload.ids) ? entry.payload.ids : [];
-    const pinnedIds = Array.isArray(entry.payload.pinnedIds) ? entry.payload.pinnedIds : [];
-    return ids.length > 0 && [...ids, ...pinnedIds].every((id) => resolvedTaskId(id) > 0);
+    // sendOutboxEntry refreshes this list from the server and ignores stale
+    // temporary ids, so an old local drag cannot block unrelated mutations.
+    return ids.length > 0;
   }
   return resolvedTaskId(localId) > 0;
 }
@@ -735,6 +794,8 @@ async function flushOutbox() {
   if (outboxSyncPromise || !state.identity || state.updateApplying || !outbox().length) return outboxSyncPromise;
   outboxSyncPromise = (async () => {
     pendingMutations += 1;
+    setSyncStatus("syncing");
+    render();
     try {
       while (outbox().length && !state.updateApplying) {
         // Historic queues can contain an old reorder/update that still refers
@@ -742,6 +803,7 @@ async function flushOutbox() {
         // being repaired automatically once the connection is available.
         const entry = outbox().find(canSendOutboxEntry);
         if (!entry) {
+          setSyncStatus("failed", "等待中的新建事项尚未获得服务器编号");
           scheduleOutboxSync(SYNC_RETRY_DELAYS[Math.min(outboxRetryAttempt++, SYNC_RETRY_DELAYS.length - 1)]);
           return;
         }
@@ -755,12 +817,14 @@ async function flushOutbox() {
         outboxRetryAttempt = 0;
         await persistLocalSnapshot();
       }
+      setSyncStatus("success");
     } catch (error) {
       if (handleAuthenticationError(error)) return;
       if (isTransportFailure(error)) {
         const delay = SYNC_RETRY_DELAYS[Math.min(outboxRetryAttempt++, SYNC_RETRY_DELAYS.length - 1)];
         scheduleOutboxSync(delay);
       }
+      setSyncStatus("failed", error.message || "同步失败");
     } finally {
       pendingMutations -= 1;
       outboxSyncPromise = null;
@@ -959,6 +1023,16 @@ function taskLists(tasks) {
   ${regularZone("has-pinned-zone")}`;
 }
 
+function syncNotice() {
+  const count = queuedTaskCount();
+  if (!count && state.syncStatus !== "success") return "";
+  const prefix = `${count || state.syncCount} 条事项`;
+  if (state.syncStatus === "syncing") return `<p class="sync-notice is-syncing" role="status">${prefix}同步中…</p>`;
+  if (state.syncStatus === "success") return `<p class="sync-notice is-success" role="status">${prefix}同步成功</p>`;
+  if (state.syncStatus === "failed") return `<button class="sync-notice is-failed" type="button" data-action="sync-now" title="${escapeHtml(state.syncError)}">${prefix}同步失败，点击立即重试</button>`;
+  return `<button class="sync-notice" type="button" data-action="sync-now">${prefix}尚未同步，点击立即同步，或等待系统自动同步。</button>`;
+}
+
 function filters() {
   const tags = ["全部", ...[...new Set(state.tasks.flatMap((task) => task.tags))].sort((a, b) => a.localeCompare(b, "zh-CN"))];
   const summary = [state.tag, state.color === "全部" ? "" : COLOR_NAMES[state.color]].filter((item) => item && item !== "全部").join(" · ") || `全部${state.view === "done" ? "已办" : "待办"}`;
@@ -1083,7 +1157,7 @@ function render() {
   const overviewContent = `${pageHeader(heading)}${filters()}`;
   const pageContent = state.view === "profile"
     ? profilePage()
-    : `<section class="workspace workspace-${state.view}" data-view="${state.view}" data-tag="${escapeHtml(state.tag)}" data-color="${escapeHtml(state.color)}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${taskContent}<p class="task-encryption-note"><i>🔒</i>待办事项内容均已加密存储</p></main></section>`;
+    : `<section class="workspace workspace-${state.view}" data-view="${state.view}" data-tag="${escapeHtml(state.tag)}" data-color="${escapeHtml(state.color)}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${syncNotice()}${taskContent}<p class="task-encryption-note"><i>🔒</i>待办事项内容均已加密存储</p></main></section>`;
   app.innerHTML = `<section class="phone"><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
     ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}${updatePrompt()}`;
   const nextAvatar = app.querySelector(".avatar");
@@ -1344,6 +1418,11 @@ app.addEventListener("click", async (event) => {
     const action = button.dataset.action;
     if (action === "submit-auth") return submitAuthentication();
     if (action === "apply-update") return applyServiceWorkerUpdate();
+    if (action === "sync-now") {
+      setSyncStatus("syncing");
+      render();
+      return flushOutboxAndLoad();
+    }
     if (action === "add") return openEditor();
     if (action === "close-editor") {
       state.editor = null;
@@ -1389,7 +1468,7 @@ app.addEventListener("click", async (event) => {
       if (completed) task.status = "none";
       render();
       await persistLocalSnapshot();
-      enqueueTaskMutation("toggle", { localId: id, completed }).catch((error) => alert(error.message));
+      publishTaskMutation("toggle", { localId: id, completed }).catch((error) => alert(error.message));
       return;
     }
     if (action === "delete-task") {
