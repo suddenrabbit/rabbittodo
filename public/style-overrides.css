@@ -672,10 +672,25 @@ body.is-task-dragging {
 }
 
 .filter-toggle i {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  display: grid;
+  place-items: center;
   color: #8d8c96;
-  font-size: 16px;
+  font-size: 0;
   font-style: normal;
+  line-height: 1;
   transition: transform .18s ease;
+}
+
+.filter-toggle i::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
 }
 
 .filter-panel.is-open .filter-toggle i {

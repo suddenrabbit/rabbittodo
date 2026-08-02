@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260802.000951";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v55";
+const APP_VERSION = "v20260802.183945";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v57";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";

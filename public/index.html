@@ -13,21 +13,12 @@
   <link rel="icon" type="image/png" href="/rabbittodo-icon-dock-v4.png" />
   <style>
     html, body { margin: 0; min-height: 100%; background: #f8f8fa; }
-    .app-launch-splash { position: fixed; inset: 0; display: grid; place-items: center; background: #f8f8fa; color: #202126; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif; }
-    .app-launch-content { display: grid; justify-items: center; gap: 13px; transform: translateY(-5vh); }
-    .app-launch-icon { width: 76px; height: 76px; overflow: hidden; border-radius: 25px; background: #6758d7; box-shadow: 0 12px 30px #6556d13d; }
-    .app-launch-icon img { display: block; width: 100%; height: 100%; object-fit: cover; transform: scale(1.18); }
-    .app-launch-name { font-size: 20px; font-weight: 800; letter-spacing: -.45px; }
-    .app-launch-status { display: inline-flex; align-items: center; gap: 7px; margin-top: 5px; color: #92909c; font-size: 12px; }
-    .app-launch-spinner { width: 13px; height: 13px; border: 2px solid #d9d6ee; border-top-color: #6758d7; border-radius: 50%; animation: app-launch-spin .8s linear infinite; }
-    @keyframes app-launch-spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .app-launch-spinner { animation: none; } }
   </style>
   <link rel="stylesheet" href="/style.css" />
   <link rel="stylesheet" href="/style-overrides.css" />
 </head>
 <body>
-  <main id="app" class="app-shell"><section class="app-launch-splash" aria-label="RabbitToDo 正在加载"><div class="app-launch-content"><div class="app-launch-icon"><img src="/rabbittodo-icon.png" alt="" /></div><strong class="app-launch-name">RabbitToDo</strong><span class="app-launch-status"><i class="app-launch-spinner"></i>正在同步事项</span></div></section></main>
+  <main id="app" class="app-shell"></main>
   <script src="/app.js" defer></script>
 </body>
 </html>
