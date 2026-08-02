@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260802.233945";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v58";
+const APP_VERSION = "v20260802.235358";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v59";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -1331,10 +1331,9 @@ function persistDraggedOrder() {
     completed: state.view === "done",
   };
   render();
-  // enqueueTaskMutation captures the already-updated task order and the queue
-  // in one IndexedDB snapshot, so an in-flight remote read cannot observe a
-  // reordered local list without also seeing its protection entry.
-  enqueueTaskMutation("reorder", payload).catch((error) => alert(error.message));
+  // A normal drag is an immediate write. Only a real transport failure leaves
+  // this order in the outbox and shows the pending-sync notice.
+  publishTaskMutation("reorder", payload).catch((error) => alert(error.message));
 }
 
 function finishPointerDrag(cancelled = false) {
