@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260802.235358";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v59";
+const APP_VERSION = "v20260803.073519";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v60";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -1477,7 +1477,7 @@ app.addEventListener("click", async (event) => {
       state.editor = null;
       render();
       await persistLocalSnapshot();
-      enqueueTaskMutation("delete", { localId: id }).catch((error) => alert(error.message));
+      publishTaskMutation("delete", { localId: id }).catch((error) => alert(error.message));
       return;
     }
     return;
