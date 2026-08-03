@@ -6,7 +6,7 @@ RabbitToDo 是一个面向个人使用的轻量待办 PWA，围绕"快速记录�
 
 当前 2.2 本地开发基线：
 
-- Git commit：`4ebf222`（2.2 固化中，待本轮提交）
+- Git commit：`4150cfa`
 - 应用版本：`v20260803.141847`
 - Service Worker 缓存：`rabbittodo-v62`
 - 数据平台：Cloudflare Workers + D1

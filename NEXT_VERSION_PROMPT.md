@@ -4,7 +4,7 @@
 
 ---
 
-我们继续开发 RabbitToDo。用户名密码账户体系与旧用户加密迁移已经完成；2.1 已完成本地优先、离线 outbox、排序与 PWA 启动体验专项修复；2.2 已修复 PC 浏览器会话保持（Cookie 调整为 `SameSite=Lax` 并补充 `Expires`），并将计划完成日期显示优化为不带前导零。后续从当前 2.2 基线继续迭代。
+我们继续开发 RabbitToDo。用户名密码账户体系与旧用户加密迁移已经完成；2.1 已完成本地优先、离线 outbox、排序与 PWA 启动体验专项修复；2.2 已固化，包含 PC 浏览器会话保持修复（会话 Cookie 由 `SameSite=Strict` 调整为 `Lax` 并补充 `Expires`）与计划完成日期显示优化（不带前导零，如 `8月3日`）。后续从当前 2.2 基线继续迭代。
 
 项目仓库位于：
 
@@ -28,7 +28,7 @@ git log -5 --oneline
 
 当前 2.2 本地开发基线：
 
-- commit：`4ebf222`（2.2 固化中，待本轮提交）
+- commit：`4150cfa`
 - 应用版本：`v20260803.141847`
 - Service Worker：`rabbittodo-v62`
 - 技术栈：原生 HTML/CSS/JavaScript PWA + Cloudflare Worker + D1
