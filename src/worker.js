@@ -30,8 +30,9 @@ function timingSafeEqual(a, b) { if (a.length !== b.length) return false; let re
 async function passwordMatches(password, row) { return timingSafeEqual(await b64(await pbkdf2(password, row.password_salt, JSON.parse(row.password_params || "{}").iterations || PASSWORD_ITERATIONS)), String(row.password_hash || "")); }
 function cookieValue(request, name) { return request.headers.get("Cookie")?.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))?.[1] || ""; }
 function cookieSecurity(request) { return new URL(request.url).protocol === "https:" ? "; Secure" : ""; }
-function sessionCookie(token, request, maxAge = SESSION_DAYS * 86400) { return `rabbittodo_session=${token}; Path=/; HttpOnly; SameSite=Strict${cookieSecurity(request)}; Max-Age=${maxAge}`; }
-function clearSessionCookie(request) { return `rabbittodo_session=; Path=/; HttpOnly; SameSite=Strict${cookieSecurity(request)}; Max-Age=0`; }
+function cookieExpires(maxAge = SESSION_DAYS * 86400) { return new Date(Date.now() + maxAge * 1000).toUTCString(); }
+function sessionCookie(token, request, maxAge = SESSION_DAYS * 86400) { return `rabbittodo_session=${token}; Path=/; HttpOnly; SameSite=Lax${cookieSecurity(request)}; Max-Age=${maxAge}; Expires=${cookieExpires(maxAge)}`; }
+function clearSessionCookie(request) { return `rabbittodo_session=; Path=/; HttpOnly; SameSite=Lax${cookieSecurity(request)}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`; }
 function expiry(days = SESSION_DAYS) { return new Date(Date.now() + days * 86400_000).toISOString(); }
 async function bodyFrom(request) { const raw = await request.text(); if (raw.length > 10_000_000) throw new Error("请求内容过大"); try { return raw ? JSON.parse(raw) : {}; } catch { throw new Error("请求格式无效"); } }
 function normalizeUsername(value) { return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("en-US"); }

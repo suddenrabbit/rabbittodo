@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260803.073519";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v60";
+const APP_VERSION = "v20260803.141847";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v62";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -361,8 +361,8 @@ async function decryptApiPayload(payload) {
 const dateLabel = (date) => {
   if (!date) return "未安排";
   if (date === today()) return "今天";
-  const [year, month, day] = date.split("-");
-  return year === today().slice(0, 4) ? `${month}月${day}日` : `${year}年${month}月${day}日`;
+  const [year, month, day] = date.split("-").map(Number);
+  return year === Number(today().slice(0, 4)) ? `${month}月${day}日` : `${year}年${month}月${day}日`;
 };
 const isOverdue = (task) => !task.completed && task.due_date && task.due_date < today();
 
