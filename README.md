@@ -1,16 +1,22 @@
-# RabbitToDo 2.2
+# RabbitToDo 2.3
 
 RabbitToDo 是一个面向个人使用的轻量待办 PWA，围绕"快速记录、跨设备同步、低干扰管理"设计。它可以安装到 iPhone、iPad 和桌面设备，并根据窗口横竖比例切换响应式布局。
 
 当前生产地址：[todo.srabbitwork.site](https://todo.srabbitwork.site)
 
-当前 2.2 本地开发基线：
+当前 2.3 本地开发基线：
+
+- Git commit：`13af4cc`
+- 应用版本：`v20260804.172111`
+- Service Worker 缓存：`rabbittodo-v72`
+- 数据平台：Cloudflare Workers + D1
+- 源代码：GitHub `suddenrabbit/rabbittodo`
+
+2.2 已上线基线（用于判断旧版本兼容性与回退边界）：
 
 - Git commit：`4150cfa`
 - 应用版本：`v20260803.141847`
 - Service Worker 缓存：`rabbittodo-v62`
-- 数据平台：Cloudflare Workers + D1
-- 源代码：GitHub `suddenrabbit/rabbittodo`
 
 2.0 生产起点（用于判断旧版本兼容性与回退边界）：
 
@@ -20,9 +26,9 @@ RabbitToDo 是一个面向个人使用的轻量待办 PWA，围绕"快速记录�
 - 数据平台：Cloudflare Workers + D1
 - 源代码：GitHub `suddenrabbit/rabbittodo`
 
-2.0 在 1.0 任务能力的基础上完成了用户名密码账户体系、旧身份码迁移、管理员账号控制、PWA 更新安全和长列表滚动体验。2.1 在其上增加本地优先任务快照、离线 outbox、跨设备同步修复、简化排序和响应式滚动优化；在线新建、编辑、完成、删除与排序均直接写入，只有网络层失败才进入 outbox。生产 D1 保留既有任务数据，旧用户均已完成升级。2.2 在此基础上修复 PC 浏览器会话保持问题（会话 Cookie 由 `SameSite=Strict` 调整为 `Lax`，并同时下发 `Expires` 与 `Max-Age`，外部链接与书签等场景不再丢登录态），并将计划完成日期的展示格式优化为不带前导零（如 `8月3日`）。
+2.0 在 1.0 任务能力的基础上完成了用户名密码账户体系、旧身份码迁移、管理员账号控制、PWA 更新安全和长列表滚动体验。2.1 在其上增加本地优先任务快照、离线 outbox、跨设备同步修复、简化排序和响应式滚动优化；在线新建、编辑、完成、删除与排序均直接写入，只有网络层失败才进入 outbox。生产 D1 保留既有任务数据，旧用户均已完成升级。2.2 在此基础上修复 PC 浏览器会话保持问题（会话 Cookie 由 `SameSite=Strict` 调整为 `Lax`，并同时下发 `Expires` 与 `Max-Age`，外部链接与书签等场景不再丢登录态），并将计划完成日期的展示格式优化为不带前导零（如 `8月3日`）。2.3 在此基础上新增定时提醒与 Web Push 推送：任务可设置提醒时间与重复规则，页面打开时由本地横幅和系统通知提醒，页面关闭时由 Worker Cron 每分钟扫描到期提醒并向已订阅设备推送；同时优化任务卡片的日期、状态、提醒与标签展示。
 
-## 2.2 功能概览
+## 2.3 功能概览
 
 ### 任务管理
 
@@ -73,6 +79,16 @@ RabbitToDo 是一个面向个人使用的轻量待办 PWA，围绕"快速记录�
 - 竖屏时标题与筛选区固定，仅任务列表滚动；横屏时左侧功能区固定、右侧任务列独立滚动。自动同步和同一列表内的重新渲染会按首个可见任务恢复阅读位置，不再跳回顶部。
 - 支持 iPhone、iPad、macOS Safari 和桌面宽屏；宽大于高时使用横屏双栏布局。
 
+### 提醒与推送通知
+
+- 任务卡片可设置提醒日期与时间（当前支持上海时区），并选择不重复、每天、每周或每月重复；提醒条目在卡片上以闹钟图标展示。
+- 页面打开时由前端本地检查到期提醒（25 秒节流，不产生额外 API 请求）：始终显示应用内横幅，已授权系统通知时再弹出浏览器通知；每个设备用本地 `fireKey` 防重。
+- 页面关闭时由 Worker Cron（`* * * * *`，每分钟）扫描到期提醒，向该账号全部已注册推送设备发送 Web Push；推送使用 VAPID 加密（Web Push 协议 `aes128gcm`）。
+- “我的”页展示真实订阅状态（已开启/未注册/不可用），可一键请求权限并注册推送；“重新开启推送”会重新拉取 VAPID 公钥并重建不完整订阅。
+- 推送失败（非 404/410）保留触发时间，由下一次 Cron 继续重试，不吞提醒；无订阅时没有可送达设备，不重复提醒直接停用、重复提醒推进到下一次，避免每分钟空转放大 D1 读取。
+- 推送服务返回 404/410（订阅过期/失效）时自动清理该订阅；完成任务、删除任务或清除提醒会同步停用/删除对应提醒。
+- 订阅与提醒数据保存在 D1 新增的 `task_reminders`、`push_subscriptions` 两张表中（`migrations/0008_reminders.sql`），不修改既有任务表。
+
 ## 技术架构
 
 ```text
@@ -88,6 +104,8 @@ NEXT_VERSION_PROMPT.md      新对话启动 Prompt
 
 前端为无框架的 HTML、CSS 和 JavaScript；后端由 Cloudflare Worker 提供 `/api/*`，D1 保存账号、会话、一次性重置记录与任务数据。
 
+提醒链路：`public/app.js` 负责页面打开时的本地检查与横幅；`src/worker.js` 的 `scheduled` 处理器由 `wrangler.jsonc` 中的 `triggers.crons`（`* * * * *`）每分钟触发，扫描 D1 到期提醒并向已注册设备推送。推送密钥通过环境变量/Secret 提供：本地 `VAPID_PRIVATE_KEY`、`VAPID_PUBLIC_KEY` 写在 `.dev.vars`，生产用 `wrangler secret put` 配置。
+
 ## 本地开发
 
 环境要求：Node.js 22+、pnpm。
@@ -99,6 +117,12 @@ pnpm dev --port 8792
 ```
 
 本地地址通常为 [http://localhost:8792](http://localhost:8792)。使用已有用户名密码账号验证持续登录、离线恢复与任务同步，也可以输入一个新用户名验证注册流程。本地 Wrangler 使用模拟 D1，不会修改生产数据库。
+
+本地 Wrangler **不会自动触发 Cron**（官方行为），需要手动触发 `scheduled` 处理器以验证提醒推送：
+
+```bash
+curl "http://localhost:8792/cdn-cgi/handler/scheduled"
+```
 
 常用检查：
 
@@ -138,7 +162,27 @@ Cloudflare Git 集成可关联 GitHub `main` 分支自动部署。正式环境�
 pnpm run db:migrate:remote
 ```
 
-2.0 账户体系对应的 `migrations/0006_user_accounts.sql` 已进入生产基线。2.1 的 `migrations/0007_offline_task_mutations.sql` 已进入当前生产 schema；它只给既有任务表增加可空的客户端离线创建编号及唯一索引，用于安全重试，不删除、不重建也不修改既有任务内容。后续数据库结构变化必须从 `0008` 起新增 migration。
+2.0 账户体系对应的 `migrations/0006_user_accounts.sql` 已进入生产基线。2.1 的 `migrations/0007_offline_task_mutations.sql` 已进入当前生产 schema；它只给既有任务表增加可空的客户端离线创建编号及唯一索引，用于安全重试，不删除、不重建也不修改既有任务内容。2.3 的 `migrations/0008_reminders.sql` 新增 `task_reminders` 与 `push_subscriptions` 两张表及索引，不修改既有任务表。后续数据库结构变化必须从 `0009` 起新增 migration。
+
+#### 2.3 发布顺序（含新 migration）
+
+2.3 首次发布必须**先执行远程 migration，再部署代码**：
+
+```bash
+pnpm run db:migrate:remote
+pnpm run deploy
+```
+
+Cron 触发已内置于 `wrangler.jsonc` 的 `triggers.crons`（`* * * * *`），随 `pnpm run deploy` 一并生效，无需在 Dashboard 手工添加；可在 Dashboard → Workers & Pages → `rabbittodo` → Settings → Triggers → Cron Triggers 中确认。
+
+推送密钥在生产首次部署前配置（本地开发用 `.dev.vars`，不入库）：
+
+```bash
+pnpm exec wrangler secret put VAPID_PRIVATE_KEY
+pnpm exec wrangler secret put VAPID_PUBLIC_KEY
+```
+
+免费版额度提示：Cron 每分钟触发每天固定 1440 次调用，约占 Workers Free 每日 10 万请求额度的 1.44%（Cron 计入请求上限）；D1 Free 每日 500 万行读取、10 万行写入。当前提醒量级下余量充足，若后续提醒规模显著增长，再考虑降频或聚合推送。
 
 其他发布同样应在确认 migration 成功后再推送 Git，由 Cloudflare 自动部署。迁移必须是增量且保护既有数据，禁止通过删除或重建生产表来完成普通升级。
 
@@ -202,6 +246,9 @@ pnpm exec wrangler d1 execute rabbittodo --remote --file=/tmp/rabbittodo-data.sq
 - Background Sync 在各浏览器支持不一致；网络恢复、回到前台和定时检查会继续尝试发送本地 outbox，PWA 被完全终止时将在下次打开后继续。
 - 服务端 PBKDF2 必须保持在 Cloudflare Workers 支持范围内；2.0 固定为 100,000 次。浏览器端任务内容派生使用 120,000 次，两者用途不同，不能机械合并。
 - 登录失败限速目前保存在单个 Worker 实例内，正式扩大使用规模前可迁移到 Durable Object、KV 或其他跨实例方案。
+- 提醒时间当前仅支持上海时区；其他时区需要先扩展 `SUPPORTED_TIME_ZONES` 与服务端时区换算逻辑。
+- 页面关闭时的提醒依赖浏览器推送通道与 Worker Cron；未注册推送的设备只能靠页面打开时的本地横幅提醒，不会收到后台推送。
+- 有推送订阅但推送服务持续失败（非 404/410）时，提醒会保留触发时间由 Cron 每分钟重试，属于“不吞提醒”的预期行为；本地开发经代理推送可能较慢。
 - 管理后台继续保留默认密码 `zhoumeng1987` 的哈希回退，源码不保存明文，但默认口令本身仍属于过渡方案；生产可用 Worker Secret `ADMIN_PASSWORD` 覆盖。
 - 管理员一次性重置码只重置密码哈希，内部身份码和任务密文保持不变；获得重置码等同于获得该账号访问权，因此应严格限制后台权限。
 - 历史明文自动加密逻辑应保留过渡期；确认生产 D1 不再存在明文后，可在后续版本评估清理并强制只接受密文。
