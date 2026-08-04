@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260804.172111";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v72";
+const APP_VERSION = "v20260804.215504";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v73";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -649,7 +649,7 @@ function dueReminderBanner() {
     return Boolean(task && !task.completed && task.reminder);
   });
   if (!state.dueReminders.length) return "";
-  return `<div class="due-reminder-bar" role="status">${state.dueReminders.map((item) => `<div class="due-reminder-item"><span>⏰ ${escapeHtml(item.title)}</span><button type="button" data-action="dismiss-reminder" data-key="${escapeHtml(item.key)}">知道了</button></div>`).join("")}</div>`;
+  return `<div class="due-reminder-bar" role="status">${state.dueReminders.map((item) => `<div class="due-reminder-item"><span>🔔 ${escapeHtml(item.title)}</span><button type="button" data-action="dismiss-reminder" data-key="${escapeHtml(item.key)}">知道了</button></div>`).join("")}</div>`;
 }
 
 async function enterAccount(account) {
@@ -1208,7 +1208,7 @@ function taskCard(task) {
   // 计划完成日期只在两种情况下展示：已完成任务，或距今超过 14 天的远期任务；
   // 14 天内（含今天）与超期任务只显示对应徽标，避免信息重复。
   const due = task.due_date && (task.completed || !distanceBadge) ? `<span class="due"><i class="due-icon">📅</i><span class="due-label">${dateLabel(task.due_date)}</span></span>` : "";
-  const reminderBadge = task.reminder ? `<span class="reminder-badge"><i class="reminder-icon">⏰</i>${reminderLabel(task.reminder)}</span>` : "";
+  const reminderBadge = task.reminder ? `<span class="reminder-badge"><i class="reminder-icon">🔔</i>${reminderLabel(task.reminder)}</span>` : "";
   const syncBadge = task._unsynced ? '<span class="sync-badge">未同步</span>' : "";
   return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : "is-draggable"} ${overdue ? "is-overdue" : ""} ${showPinned ? "is-pinned" : ""}" data-task-id="${task.id}">
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
@@ -1291,7 +1291,7 @@ function editor() {
     ? `<button type="button" class="due-date-value" data-action="open-date-picker"><i>📅</i>${dateLabel(task.due_date)}</button><button type="button" class="clear-date-button" data-action="clear-due-date">清除</button>`
     : '<button type="button" class="set-date-button" data-action="open-date-picker">设置日期</button>';
   const reminderControl = task.reminder
-    ? `<button type="button" class="due-date-value" data-action="open-reminder-picker"><i>⏰</i>${reminderLabel(task.reminder)}</button><button type="button" class="clear-date-button" data-action="clear-reminder-editor">清除</button>`
+    ? `<button type="button" class="due-date-value" data-action="open-reminder-picker"><i>🔔</i>${reminderLabel(task.reminder)}</button><button type="button" class="clear-date-button" data-action="clear-reminder-editor">清除</button>`
     : '<button type="button" class="set-date-button" data-action="open-reminder-picker">设置提醒</button>';
   return `<div class="modal-backdrop"><form class="composer" id="task-form"><div class="sheet-grabber"></div><div class="composer-head"><h2>${task.id ? "编辑事项" : "新建事项"}</h2><button type="button" data-action="close-editor">取消</button></div>
     <input id="task-title" value="${escapeHtml(task.title)}" placeholder="想完成什么？" autofocus required maxlength="200" />
@@ -1335,7 +1335,7 @@ function profilePage() {
   const passwordForm = state.passwordDialog ? '<form id="change-password-form" class="account-form"><input id="current-password" type="password" placeholder="当前密码" required /><input id="new-password" type="password" placeholder="新密码（至少 8 位）" required /><input id="new-password-confirm" type="password" placeholder="再次输入新密码" required /><button class="save-button" type="submit">更新密码</button></form>' : "";
   const notif = notificationStatusText();
   const notifBtn = !("Notification" in window) || !notif.button ? "" : `<button type="button" class="save-button notification-toggle" data-action="enable-notifications">${notif.button}</button>`;
-  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span>${passwordForm}<p class="notification-status">⏰ ${notif.label}</p>${notifBtn}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
+  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span>${passwordForm}<p class="notification-status">🔔 ${notif.label}</p>${notifBtn}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
 }
 
 function taskScrollContainer() {
