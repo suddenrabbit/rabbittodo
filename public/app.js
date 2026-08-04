@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260803.141847";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v62";
+const APP_VERSION = "v20260804.172111";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v72";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -67,7 +67,7 @@ localStorage.removeItem("todo-identity");
 const state = {
   identity: "", username: "", encryptionSeed: "", authMode: "login", authPromptOpen: true, authSubmitting: false, authDirty: false,
   authError: "", authUsername: "", authPassword: "", authConfirm: "", authResetCode: "", identityDraft: "",
-  passwordDialog: false, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, draftTags: [], tagInput: "",
+  passwordDialog: false, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, reminderPicker: null, pushStatus: null, dueReminders: [], draftTags: [], tagInput: "",
   updateReady: false, updateApplying: false,
   syncStatus: "idle", syncError: "", syncCount: 0,
 };
@@ -364,15 +364,28 @@ const dateLabel = (date) => {
   const [year, month, day] = date.split("-").map(Number);
   return year === Number(today().slice(0, 4)) ? `${month}月${day}日` : `${year}年${month}月${day}日`;
 };
+const reminderLabel = (reminder) => {
+  if (!reminder?.remindAt) return "";
+  const ms = Date.parse(reminder.remindAt);
+  if (Number.isNaN(ms)) return "";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: SHANGHAI_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(ms)).filter(({ type }) => type !== "literal").map(({ type, value }) => [type, value]));
+  const year = Number(parts.year), month = Number(parts.month), day = Number(parts.day);
+  const hour = parts.hour === "24" ? "00" : parts.hour;
+  const localDate = `${parts.year}-${parts.month}-${parts.day}`;
+  const datePart = localDate === today() ? "今天" : (year === Number(today().slice(0, 4)) ? `${month}月${day}日` : `${year}年${month}月${day}日`);
+  const freqText = { none: "", daily: "·每天", weekly: "·每周", monthly: "·每月" }[reminder.repeatRule?.freq] || "";
+  return `${datePart} ${hour}:${parts.minute}${freqText}`;
+};
 const isOverdue = (task) => !task.completed && task.due_date && task.due_date < today();
 
 function dueDistanceBadge(task) {
   if (task.completed || !task.due_date) return "";
   const millisecondsPerDay = 24 * 60 * 60 * 1_000;
   const distance = Math.round((Date.parse(`${task.due_date}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / millisecondsPerDay);
-  if (distance < 0) return `<span class="due-distance-badge is-overdue">超期 ${Math.abs(distance)} 天</span>`;
+  if (distance < 0) return `<span class="due-distance-badge is-overdue">逾期 ${Math.abs(distance)} 天</span>`;
   if (distance === 0) return '<span class="due-distance-badge is-today">今天到期</span>';
-  return `<span class="due-distance-badge is-upcoming">还剩 ${distance} 天</span>`;
+  if (distance <= 14) return `<span class="due-distance-badge is-upcoming">剩余 ${distance} 天</span>`;
+  return "";
 }
 
 function completedDate(task) {
@@ -409,6 +422,28 @@ function datePicker() {
   return `<div class="date-picker-backdrop"><section class="date-picker-sheet" role="dialog" aria-modal="true" aria-label="选择计划完成日期"><div class="sheet-grabber"></div><div class="date-picker-head"><button type="button" data-action="close-date-picker">取消</button><strong>${year}年${month}月</strong><button type="button" data-action="clear-picker-date">不设置</button></div><div class="calendar-nav"><button type="button" data-action="previous-calendar-month" aria-label="上个月">‹</button><span>${year}年${month}月</span><button type="button" data-action="next-calendar-month" aria-label="下个月">›</button></div><div class="calendar-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div class="calendar-grid">${dates}</div><div class="calendar-shortcuts"><button type="button" data-action="pick-date" data-date="${today()}">今天</button><button type="button" data-action="pick-date" data-date="${addDays(today(), 1)}">明天</button></div></section></div>`;
 }
 
+function reminderPicker() {
+  if (!state.reminderPicker) return "";
+  const picker = state.reminderPicker;
+  const monthKey = picker.month;
+  const [year, month] = monthKey.split("-").map(Number);
+  const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const selected = picker.date || "";
+  const dates = Array.from({ length: firstWeekday + daysInMonth }, (_, index) => {
+    if (index < firstWeekday) return '<span class="calendar-day is-empty" aria-hidden="true"></span>';
+    const day = index - firstWeekday + 1;
+    const date = `${monthKey}-${String(day).padStart(2, "0")}`;
+    const classes = ["calendar-day", date === selected ? "is-selected" : "", date === today() ? "is-today" : ""].filter(Boolean).join(" ");
+    return `<button type="button" class="${classes}" data-action="pick-reminder-date" data-date="${date}">${day}</button>`;
+  }).join("");
+  const hour = String(picker.hour).padStart(2, "0");
+  const minute = String(picker.minute).padStart(2, "0");
+  const freqs = [["none", "不重复"], ["daily", "每天"], ["weekly", "每周"], ["monthly", "每月"]];
+  const freqButtons = freqs.map(([value, label]) => `<button type="button" class="reminder-freq ${picker.freq === value ? "selected" : ""}" data-action="pick-reminder-freq" data-freq="${value}">${label}</button>`).join("");
+  return `<div class="date-picker-backdrop"><section class="date-picker-sheet reminder-sheet" role="dialog" aria-modal="true" aria-label="设置提醒时间"><div class="sheet-grabber"></div><div class="date-picker-head"><button type="button" data-action="close-reminder-picker">取消</button><strong>提醒</strong><button type="button" data-action="clear-reminder">不设置</button></div><div class="calendar-nav"><button type="button" data-action="previous-reminder-month" aria-label="上个月">‹</button><span>${year}年${month}月</span><button type="button" data-action="next-reminder-month" aria-label="下个月">›</button></div><div class="calendar-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div class="calendar-grid">${dates}</div><div class="reminder-time-row"><span>时间</span><div class="reminder-time-inputs"><input type="number" class="reminder-hour" min="0" max="23" value="${hour}" aria-label="小时" /><span>:</span><input type="number" class="reminder-minute" min="0" max="59" value="${minute}" aria-label="分钟" /></div></div><div class="reminder-freq-row"><span>重复</span><div class="reminder-freq-options">${freqButtons}</div></div><div class="reminder-confirm-row"><button type="button" class="save-button" data-action="confirm-reminder">确定</button></div></section></div>`;
+}
+
 async function api(path, options = {}) {
   const { decrypt = true, timeoutMs = 0, ...fetchOptions } = options;
   const controller = timeoutMs ? new AbortController() : null;
@@ -433,6 +468,190 @@ async function api(path, options = {}) {
   return decrypt ? decryptApiPayload(payload) : payload;
 }
 
+let lastReminderCheckAt = 0;
+
+function urlBase64ToUint8Array(base64url) {
+  const str = String(base64url || "").replaceAll("-", "+").replaceAll("_", "/");
+  const padded = str + "=".repeat((4 - (str.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function fetchVapidPublicKey() {
+  try {
+    const response = await fetch("/api/push/vapid");
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.publicKey || null;
+  } catch { return null; }
+}
+
+// 统一从 PushSubscription 读取 p256dh/auth：优先用标准 getKey()，兼容 toJSON().keys 与非标准 keys 属性。
+function pushSubscriptionKeys(subscription) {
+  const arrayBufferToBase64Url = (buffer) => {
+    if (!buffer || !buffer.byteLength) return "";
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  };
+  const json = typeof subscription?.toJSON === "function" ? subscription.toJSON() : null;
+  const legacy = json?.keys || subscription?.keys || {};
+  const p256dh = legacy.p256dh || (typeof subscription?.getKey === "function" ? arrayBufferToBase64Url(subscription.getKey("p256dh")) : "");
+  const auth = legacy.auth || (typeof subscription?.getKey === "function" ? arrayBufferToBase64Url(subscription.getKey("auth")) : "");
+  return { p256dh, auth };
+}
+
+// 已授权时静默订阅 Web Push（不请求权限；Safari 等浏览器要求 requestPermission 在用户手势中调用）。
+async function subscribeIfPermitted() {
+  if (!serviceWorkerRegistration || !("PushManager" in window)) return false;
+  if (!("Notification" in window) || Notification.permission !== "granted") return false;
+  try {
+    const publicKey = await fetchVapidPublicKey();
+    if (!publicKey) return false;
+    let subscription = await serviceWorkerRegistration.pushManager.getSubscription();
+    // 旧订阅可能缺少 p256dh/auth（例如由旧版本或旧 VAPID 密钥创建），缺少密钥时服务端无法推送，直接退订重建。
+    if (subscription) {
+      const existingKeys = pushSubscriptionKeys(subscription);
+      if (!existingKeys.p256dh || !existingKeys.auth) {
+        await subscription.unsubscribe().catch(() => {});
+        subscription = null;
+      }
+    }
+    if (!subscription) subscription = await serviceWorkerRegistration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+    const keys = pushSubscriptionKeys(subscription);
+    if (!subscription.endpoint || !keys.p256dh || !keys.auth) return false;
+    await api("/api/push/subscribe", { method: "POST", body: JSON.stringify({ endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent: navigator.userAgent }), decrypt: false, timeoutMs: 8000 });
+    return true;
+  } catch (error) {
+    console.error("subscribeIfPermitted", error);
+    return false;
+  }
+}
+
+// 用户手势触发：请求通知权限并订阅。Safari 要求 requestPermission 在点击等手势中调用，否则静默拒绝。
+async function requestNotificationPermission() {
+  if (!("Notification" in window)) { alert("当前设备不支持通知"); return; }
+  if (Notification.permission === "granted") {
+    const subscribed = await subscribeIfPermitted();
+    if (!subscribed) alert("推送订阅注册失败，请稍后在浏览器设置中确认通知已允许，再点击重试");
+    return;
+  }
+  if (Notification.permission === "denied") { alert("通知已被禁用，请在浏览器设置中手动开启后刷新页面"); return; }
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission === "granted") {
+      const subscribed = await subscribeIfPermitted();
+      if (!subscribed) alert("推送订阅注册失败，请稍后在浏览器设置中确认通知已允许，再点击重试");
+      render();
+    }
+    else if (permission === "denied") alert("通知权限被拒绝，请在浏览器设置中手动开启");
+  } catch (error) { console.error("requestNotificationPermission", error); }
+}
+
+// 登出时取消本机订阅并通知服务器删除记录。
+async function removePushSubscription() {
+  if (!serviceWorkerRegistration || !("PushManager" in window)) return;
+  try {
+    const subscription = await serviceWorkerRegistration.pushManager.getSubscription();
+    if (subscription) {
+      await api("/api/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint: subscription.endpoint }), decrypt: false, timeoutMs: 5000 }).catch(() => {});
+      await subscription.unsubscribe();
+    }
+  } catch (error) {
+    console.error("removePushSubscription", error);
+  }
+}
+
+let pushStatusRequest = null;
+// 真实上报：查询服务端是否已有本账号的推送订阅，并反馈 VAPID 配置状态。
+async function refreshPushStatus() {
+  if (!state.identity) { state.pushStatus = null; return null; }
+  if (!pushStatusRequest) {
+    pushStatusRequest = api("/api/push/status", { decrypt: false, timeoutMs: 5000 })
+      .then((data) => { state.pushStatus = data; if (state.view === "profile") render(); return data; })
+      .catch(() => { state.pushStatus = null; return null; })
+      .finally(() => { pushStatusRequest = null; });
+  }
+  return pushStatusRequest;
+}
+
+function notificationStatusText() {
+  if (!("Notification" in window)) return { label: "当前设备不支持通知", level: "unsupported", button: "" };
+  const permission = Notification.permission;
+  const server = state.pushStatus;
+  if (permission === "denied") return { label: "通知已被禁用", level: "denied", button: "通知已禁用，如何开启？" };
+  if (permission !== "granted") return { label: "通知未开启", level: "off", button: "开启通知" };
+  if (server && server.vapidConfigured === false) return { label: "服务端未配置推送密钥", level: "error", button: "" };
+  if (server && server.subscribed) return { label: "通知已开启", level: "on", button: "" };
+  if (!server) return { label: "通知已开启", level: "on", button: "" };
+  return { label: "通知已开启，但订阅未注册", level: "error", button: "重新开启推送" };
+}
+
+// weekly/monthly 是否应在今天触发：按上海时区比较星期/日期。
+function reminderDueToday(remindAtMs, freq) {
+  if (freq === "none" || freq === "daily") return true;
+  const dtf = new Intl.DateTimeFormat("en-US", { timeZone: SHANGHAI_TIME_ZONE, weekday: "short", day: "2-digit" });
+  const fmt = (ts) => Object.fromEntries(dtf.formatToParts(new Date(ts)).filter(({ type }) => type !== "literal").map(({ type, value }) => [type, value]));
+  const remind = fmt(remindAtMs);
+  const now = fmt(Date.now());
+  if (freq === "weekly") return remind.weekday === now.weekday;
+  if (freq === "monthly") return remind.day === now.day;
+  return false;
+}
+
+// 前台定时检查到期提醒（覆盖页面打开场景；后台推送由 Worker Cron 负责）。
+// none 用 remindAt 作 key 只提醒一次；重复频次用当天日期作 key 每天最多一次；weekly/monthly 严格按星期/日期匹配。
+// 到期提醒始终显示应用内横幅（不依赖系统通知权限）；已授权时再额外弹出系统通知。
+function checkDueReminders() {
+  if (!state.identity || state.authPromptOpen || state.updateApplying) return;
+  const now = Date.now();
+  if (now - lastReminderCheckAt < 25_000) return;
+  lastReminderCheckAt = now;
+  const canNotify = ("Notification" in window) && Notification.permission === "granted";
+  const todayKey = today();
+  const nowParts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: SHANGHAI_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(now)).filter(({ type }) => type !== "literal").map(({ type, value }) => [type, value]));
+  const nowMin = Number(nowParts.hour === "24" ? 0 : nowParts.hour) * 60 + Number(nowParts.minute);
+  let added = false;
+  for (const task of state.tasks) {
+    // enabled 仅表示后端是否已处理该提醒，不影响本设备未收到过提醒时的本地横幅；
+    // 每个设备用 fireKey（localStorage）防重，已提醒过的不会重复弹出。
+    if (task.completed || !task.reminder?.remindAt) continue;
+    const ms = Date.parse(task.reminder.remindAt);
+    if (Number.isNaN(ms)) continue;
+    const freq = task.reminder.repeatRule?.freq || "none";
+    if (freq === "none" && ms > now) continue;
+    if ((freq === "weekly" || freq === "monthly") && !reminderDueToday(ms, freq)) continue;
+    const remindParts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: SHANGHAI_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(ms)).filter(({ type }) => type !== "literal").map(({ type, value }) => [type, value]));
+    const remindMin = Number(remindParts.hour === "24" ? 0 : remindParts.hour) * 60 + Number(remindParts.minute);
+    if (nowMin < remindMin) continue;
+    const fireKey = `rabbittodo-fired-${task.id}-${freq === "none" ? task.reminder.remindAt : todayKey}`;
+    if (localStorage.getItem(`rabbittodo-reminder-dismissed-${fireKey}`)) continue;
+    if (!state.dueReminders.some((item) => item.key === fireKey)) {
+      state.dueReminders.push({ key: fireKey, taskId: task.id, title: task.title, remindAt: task.reminder.remindAt, freq });
+      added = true;
+    }
+    if (canNotify && !localStorage.getItem(fireKey)) {
+      try {
+        new Notification("RabbitToDo 提醒", { body: task.title || "你有一条待办提醒", tag: fireKey, icon: "/rabbittodo-icon.png" });
+        localStorage.setItem(fireKey, "1");
+      } catch (error) { console.error("notification error", error); }
+    }
+  }
+  if (added) render();
+}
+
+function dueReminderBanner() {
+  state.dueReminders = state.dueReminders.filter((item) => {
+    const task = state.tasks.find((candidate) => candidate.id === item.taskId);
+    return Boolean(task && !task.completed && task.reminder);
+  });
+  if (!state.dueReminders.length) return "";
+  return `<div class="due-reminder-bar" role="status">${state.dueReminders.map((item) => `<div class="due-reminder-item"><span>⏰ ${escapeHtml(item.title)}</span><button type="button" data-action="dismiss-reminder" data-key="${escapeHtml(item.key)}">知道了</button></div>`).join("")}</div>`;
+}
+
 async function enterAccount(account) {
   const seed = String(account.encryptionSeed || "");
   if (!/^u_[A-Za-z0-9_-]{43}$/.test(seed)) throw new Error("账号身份信息无效，请重新登录");
@@ -452,6 +671,7 @@ async function enterAccount(account) {
   state.authResetCode = "";
   state.tasks = keepOfflineData && Array.isArray(localProfile?.tasks) ? localProfile.tasks : [];
   state.view = "todo";
+  state.dueReminders = [];
   if (!keepOfflineData) {
     taskIdAliases.clear();
     nextTemporaryTaskId = -1;
@@ -459,6 +679,8 @@ async function enterAccount(account) {
   localProfile = { ...currentLocalSnapshot(), outbox: keepOfflineData ? (localProfile?.outbox || []) : [] };
   await persistLocalSnapshot();
   if (serviceWorkerRegistration) await synchronizeForeground(); else await flushOutboxAndLoad();
+  await subscribeIfPermitted();
+  await refreshPushStatus();
 }
 
 function openAuth(mode = "login") {
@@ -983,12 +1205,15 @@ function taskCard(task) {
     : "";
   const distanceBadge = dueDistanceBadge(task);
   const completionDate = completedDate(task);
-  const due = task.due_date ? `<span class="due"><i class="due-icon">◷</i><span class="due-label">${dateLabel(task.due_date)}</span></span>` : "";
+  // 计划完成日期只在两种情况下展示：已完成任务，或距今超过 14 天的远期任务；
+  // 14 天内（含今天）与超期任务只显示对应徽标，避免信息重复。
+  const due = task.due_date && (task.completed || !distanceBadge) ? `<span class="due"><i class="due-icon">📅</i><span class="due-label">${dateLabel(task.due_date)}</span></span>` : "";
+  const reminderBadge = task.reminder ? `<span class="reminder-badge"><i class="reminder-icon">⏰</i>${reminderLabel(task.reminder)}</span>` : "";
   const syncBadge = task._unsynced ? '<span class="sync-badge">未同步</span>' : "";
   return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : "is-draggable"} ${overdue ? "is-overdue" : ""} ${showPinned ? "is-pinned" : ""}" data-task-id="${task.id}">
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
     <div class="task-body"><h3>${escapeHtml(task.title)}</h3><div class="task-meta">
-      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${completionDate}${distanceBadge}${statusBadge}${due}${syncBadge}
+      ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${completionDate}${distanceBadge}${statusBadge}${due}${reminderBadge}${syncBadge}
       ${task.tags.map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}
     </div></div><i class="task-color-dot ${showPinned ? "is-star" : ""}" ${showPinned ? 'aria-label="已置顶"' : ""}>${showPinned ? "★" : ""}</i>
   </article>`;
@@ -1063,13 +1288,16 @@ function editor() {
   if (!state.editor) return "";
   const task = state.editor;
   const dueDateControl = task.due_date
-    ? `<button type="button" class="due-date-value" data-action="open-date-picker"><i>◷</i>${dateLabel(task.due_date)}</button><button type="button" class="clear-date-button" data-action="clear-due-date">清除</button>`
+    ? `<button type="button" class="due-date-value" data-action="open-date-picker"><i>📅</i>${dateLabel(task.due_date)}</button><button type="button" class="clear-date-button" data-action="clear-due-date">清除</button>`
     : '<button type="button" class="set-date-button" data-action="open-date-picker">设置日期</button>';
+  const reminderControl = task.reminder
+    ? `<button type="button" class="due-date-value" data-action="open-reminder-picker"><i>⏰</i>${reminderLabel(task.reminder)}</button><button type="button" class="clear-date-button" data-action="clear-reminder-editor">清除</button>`
+    : '<button type="button" class="set-date-button" data-action="open-reminder-picker">设置提醒</button>';
   return `<div class="modal-backdrop"><form class="composer" id="task-form"><div class="sheet-grabber"></div><div class="composer-head"><h2>${task.id ? "编辑事项" : "新建事项"}</h2><button type="button" data-action="close-editor">取消</button></div>
     <input id="task-title" value="${escapeHtml(task.title)}" placeholder="想完成什么？" autofocus required maxlength="200" />
     <textarea id="task-details" placeholder="补充任务详情（可选）" maxlength="2000">${escapeHtml(task.details || "")}</textarea>
     <div class="composer-row"><span>颜色标签</span><div class="color-options">${COLORS.map((color) => `<button type="button" class="color-picker ${color} ${task.color === color ? "selected" : ""}" data-action="pick-color" data-color="${color}">${task.color === color ? "✓" : ""}</button>`).join("")}</div></div>
-    ${task.completed ? "" : statusEditor(task)}${pinEditor(task)}${tagsEditor()}<div class="composer-row due-date-row"><span>计划完成</span><div class="due-date-control">${dueDateControl}</div></div>
+    ${task.completed ? "" : statusEditor(task)}${pinEditor(task)}${tagsEditor()}<div class="composer-row due-date-row"><span>计划完成</span><div class="due-date-control">${dueDateControl}</div></div><div class="composer-row due-date-row"><span>提醒</span><div class="due-date-control">${reminderControl}</div></div>
     ${task.id ? '<button type="button" class="delete-button" data-action="delete-task">删除事项</button>' : ""}<button class="save-button" type="submit">${task.id ? "保存修改" : "添加事项"}</button>
   </form></div>`;
 }
@@ -1105,7 +1333,9 @@ function pageHeader(heading) {
 
 function profilePage() {
   const passwordForm = state.passwordDialog ? '<form id="change-password-form" class="account-form"><input id="current-password" type="password" placeholder="当前密码" required /><input id="new-password" type="password" placeholder="新密码（至少 8 位）" required /><input id="new-password-confirm" type="password" placeholder="再次输入新密码" required /><button class="save-button" type="submit">更新密码</button></form>' : "";
-  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span>${passwordForm}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
+  const notif = notificationStatusText();
+  const notifBtn = !("Notification" in window) || !notif.button ? "" : `<button type="button" class="save-button notification-toggle" data-action="enable-notifications">${notif.button}</button>`;
+  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span>${passwordForm}<p class="notification-status">⏰ ${notif.label}</p>${notifBtn}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
 }
 
 function taskScrollContainer() {
@@ -1157,9 +1387,9 @@ function render() {
   const overviewContent = `${pageHeader(heading)}${filters()}`;
   const pageContent = state.view === "profile"
     ? profilePage()
-    : `<section class="workspace workspace-${state.view}" data-view="${state.view}" data-tag="${escapeHtml(state.tag)}" data-color="${escapeHtml(state.color)}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${syncNotice()}${taskContent}<p class="task-encryption-note"><i>🔒</i>待办事项内容均已加密存储</p></main></section>`;
+    : `<section class="workspace workspace-${state.view}" data-view="${state.view}" data-tag="${escapeHtml(state.tag)}" data-color="${escapeHtml(state.color)}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${syncNotice()}${dueReminderBanner()}${taskContent}<p class="task-encryption-note"><i>🔒</i>待办事项内容均已加密存储</p></main></section>`;
   app.innerHTML = `<section class="phone"><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
-    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${identityGate()}${updatePrompt()}`;
+    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${reminderPicker()}${identityGate()}${updatePrompt()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
     persistentAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
@@ -1174,7 +1404,7 @@ function render() {
   restoreTaskScroll(scrollSnapshot);
 }
 
-function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "", pinned: false, pinned_at: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned) }; state.datePicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
+function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "", pinned: false, pinned_at: null, reminder: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned), reminder: task.reminder || null }; state.datePicker = null; state.reminderPicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
 function commitTag() { const tag = state.tagInput.trim().replace(/^#/, ""); if (tag && !state.draftTags.includes(tag)) state.draftTags.push(tag); state.tagInput = ""; render(); document.querySelector("#tag-input")?.focus(); }
 
 function dragTargetList(pointerY) {
@@ -1426,22 +1656,31 @@ app.addEventListener("click", async (event) => {
     if (action === "close-editor") {
       state.editor = null;
       state.datePicker = null;
+      state.reminderPicker = null;
       render();
       reloadForServiceWorkerUpdate();
       return;
     }
     if (action === "view") { state.view = button.dataset.view; return render(); }
-    if (action === "profile") { state.view = "profile"; return render(); }
+    if (action === "profile") { state.view = "profile"; refreshPushStatus(); return render(); }
     if (action === "auth-login") return openAuth("login");
     if (action === "auth-register") return openAuth("register");
     if (action === "auth-reset") return openAuth("reset");
     if (action === "change-password") { state.passwordDialog = !state.passwordDialog; return render(); }
     if (action === "logout") {
+      await removePushSubscription();
       try { await api("/api/auth/logout", { method: "POST", body: "{}" }); } catch {}
       state.authUsername = state.username;
       await localClear().catch(() => {});
       localProfile = null; taskIdAliases.clear(); nextTemporaryTaskId = -1;
-      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; encryptionKeyIdentity = ""; encryptionKeyPromise = null; return render();
+      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; state.pushStatus = null; state.dueReminders = []; encryptionKeyIdentity = ""; encryptionKeyPromise = null; return render();
+    }
+    if (action === "enable-notifications") { await requestNotificationPermission(); await refreshPushStatus(); return render(); }
+    if (action === "dismiss-reminder") {
+      const key = String(button.dataset.key || "");
+      if (key) localStorage.setItem(`rabbittodo-reminder-dismissed-${key}`, "1");
+      state.dueReminders = state.dueReminders.filter((item) => item.key !== key);
+      return render();
     }
     if (action === "toggle-filters") { state.filtersOpen = !state.filtersOpen; return render(); }
     if (action === "tag-filter") { state.tag = button.dataset.tag; return render(); }
@@ -1455,6 +1694,34 @@ app.addEventListener("click", async (event) => {
     if (action === "next-calendar-month") { state.datePicker.month = shiftMonth(state.datePicker.month, 1); return render(); }
     if (action === "pick-date") { state.editor.due_date = button.dataset.date; state.datePicker = null; return render(); }
     if (action === "clear-picker-date" || action === "clear-due-date") { state.editor.due_date = ""; state.datePicker = null; return render(); }
+    if (action === "open-reminder-picker") {
+      const r = state.editor.reminder;
+      if (r && r.remindAt) {
+        const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: SHANGHAI_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(r.remindAt)).filter(({ type }) => type !== "literal").map(({ type, value }) => [type, value]));
+        state.reminderPicker = { month: `${parts.year}-${parts.month}`, date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour === "24" ? 0 : parts.hour), minute: Number(parts.minute), freq: r.repeatRule?.freq || "none" };
+    } else {
+      const t = today();
+      const nowParts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: SHANGHAI_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date()).filter(({ type }) => type !== "literal").map(({ type, value }) => [type, value]));
+      state.reminderPicker = { month: t.slice(0, 7), date: t, hour: Number(nowParts.hour === "24" ? 0 : nowParts.hour), minute: Number(nowParts.minute), freq: "none" };
+    }
+      return render();
+    }
+    if (action === "close-reminder-picker") { state.reminderPicker = null; return render(); }
+    if (action === "previous-reminder-month") { state.reminderPicker.month = shiftMonth(state.reminderPicker.month, -1); return render(); }
+    if (action === "next-reminder-month") { state.reminderPicker.month = shiftMonth(state.reminderPicker.month, 1); return render(); }
+    if (action === "pick-reminder-date") { state.reminderPicker.date = button.dataset.date; return render(); }
+    if (action === "pick-reminder-freq") { state.reminderPicker.freq = button.dataset.freq; return render(); }
+    if (action === "clear-reminder") { state.editor.reminder = null; state.reminderPicker = null; return render(); }
+    if (action === "clear-reminder-editor") { state.editor.reminder = null; return render(); }
+    if (action === "confirm-reminder") {
+      const p = state.reminderPicker;
+      if (!p.date) return;
+      const localStr = `${p.date}T${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}:00`;
+      const utcIso = new Date(`${localStr}+08:00`).toISOString();
+      state.editor.reminder = { remindAt: utcIso, tz: SHANGHAI_TIME_ZONE, repeatRule: { freq: p.freq }, enabled: true };
+      state.reminderPicker = null;
+      return render();
+    }
     if (action === "remove-tag") { state.draftTags = state.draftTags.filter((tag) => tag !== button.dataset.tag); return render(); }
     if (action === "toggle") {
       const id = Number(button.dataset.id);
@@ -1497,6 +1764,8 @@ app.addEventListener("keydown", (event) => {
   if (event.key === "Backspace" && !event.target.value && state.draftTags.length) { state.draftTags.pop(); render(); document.querySelector("#tag-input")?.focus(); }
 });
 app.addEventListener("input", (event) => {
+  if (event.target.classList?.contains("reminder-hour")) { if (state.reminderPicker) state.reminderPicker.hour = Math.max(0, Math.min(23, Number(event.target.value) || 0)); return; }
+  if (event.target.classList?.contains("reminder-minute")) { if (state.reminderPicker) state.reminderPicker.minute = Math.max(0, Math.min(59, Number(event.target.value) || 0)); return; }
   if (event.target.id?.startsWith("auth-")) {
     state.authDirty = true;
     state.authError = "";
@@ -1529,14 +1798,16 @@ app.addEventListener("submit", async (event) => {
       const dueDate = state.editor.due_date || null;
       const tag = state.tagInput.trim().replace(/^#/, "");
       const tags = tag && !state.draftTags.includes(tag) ? [...state.draftTags, tag] : state.draftTags;
-      const payload = { title, details, color: state.editor.color, status: state.editor.status || "none", tags, dueDate, pinned: Boolean(state.editor.pinned) };
+      const reminder = state.editor.reminder;
+      const reminderFields = reminder ? { reminderAt: reminder.remindAt, repeatRule: reminder.repeatRule, tz: reminder.tz } : { reminderAt: null };
+      const payload = { title, details, color: state.editor.color, status: state.editor.status || "none", tags, dueDate, pinned: Boolean(state.editor.pinned), ...reminderFields };
       const editingId = Number(state.editor.id || 0);
       if (editingId) {
         const localTask = state.tasks.find((task) => task.id === editingId);
         const previousTask = localTask ? { ...localTask, tags: [...localTask.tags] } : null;
         if (localTask) {
           const pinnedAt = payload.pinned ? (localTask.pinned ? localTask.pinned_at : new Date().toISOString()) : null;
-          Object.assign(localTask, { title, details, color: payload.color, status: payload.status, tags, due_date: dueDate, pinned: payload.pinned, pinned_at: pinnedAt });
+          Object.assign(localTask, { title, details, color: payload.color, status: payload.status, tags, due_date: dueDate, pinned: payload.pinned, pinned_at: pinnedAt, reminder: state.editor.reminder || null });
         }
         state.editor = null;
         render();
@@ -1557,7 +1828,7 @@ app.addEventListener("submit", async (event) => {
         state.tasks.unshift({
           id: temporaryId, title, details, color: payload.color, tags,
           due_date: dueDate, completed: false, completed_at: null, status: payload.status, pinned: payload.pinned, pinned_at: pinnedAt,
-          manual_position: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+          manual_position: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), reminder: state.editor.reminder || null,
         });
         state.editor = null;
         state.view = "todo";
@@ -1585,16 +1856,18 @@ window.addEventListener("pageshow", () => {
 });
 window.addEventListener("focus", () => {
   synchronizeForeground();
+  checkDueReminders();
 });
 window.addEventListener("online", () => {
   outboxRetryAttempt = 0;
   scheduleOutboxSync(500);
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") synchronizeForeground();
+  if (document.visibilityState === "visible") { synchronizeForeground(); checkDueReminders(); }
 });
 setInterval(() => {
   refreshActiveTasks();
+  checkDueReminders();
   if (state.identity && !state.authPromptOpen && !state.updateApplying && document.visibilityState !== "hidden" && outbox().length) flushOutboxAndLoad();
 }, 30_000);
 
@@ -1609,6 +1882,8 @@ async function restoreSession() {
     lastSessionLeaseAt = Date.now();
     await persistLocalSnapshot();
     if (serviceWorkerRegistration) await synchronizeForeground(); else await flushOutboxAndLoad();
+    await subscribeIfPermitted();
+    await refreshPushStatus();
   } catch (error) {
     if (error.status === 401 || error.status === 403) handleAuthenticationError(error);
     else if (!state.tasks.length) render();

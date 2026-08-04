@@ -1,4 +1,4 @@
-const CACHE = "rabbittodo-v62";
+const CACHE = "rabbittodo-v72";
 const ASSETS = ["/", "/index.html", "/style.css", "/style-overrides.css", "/app.js", "/manifest.webmanifest", "/rabbittodo-icon.png", "/rabbittodo-icon-dock-v4.png"];
 
 async function cacheLatestAssets() {
@@ -31,5 +31,19 @@ self.addEventListener("fetch", (event) => {
     if (cached) return cached;
     try { return await fetch(event.request); }
     catch { return cache.match("/"); }
+  }));
+});
+
+self.addEventListener("push", (event) => {
+  let payload = { title: "RabbitToDo", body: "你有一条待办提醒" };
+  try { if (event.data) payload = { ...payload, ...event.data.json() }; } catch {}
+  event.waitUntil(self.registration.showNotification(payload.title, { body: payload.body, icon: "/rabbittodo-icon.png", badge: "/rabbittodo-icon.png" }));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+    for (const client of clients) { if ("focus" in client) return client.focus(); }
+    if (self.clients.openWindow) return self.clients.openWindow("/");
   }));
 });

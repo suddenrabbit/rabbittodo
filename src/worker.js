@@ -48,18 +48,195 @@ function recordFailure(key) {
 }
 function clearFailure(key) { authFailures.delete(key); }
 function publicAccount(row, includeSeed = true) { return { username: row.username, ...(includeSeed ? { encryptionSeed: row.code } : {}) }; }
-function taskFromRow(row) { if (!row) return null; const { identity_code, ...task } = row; let tags = []; try { tags = JSON.parse(task.tags || "[]"); } catch {} return { ...task, completed: Boolean(task.completed), pinned: Boolean(task.pinned), tags, details: task.details || "", status: task.status || "none" }; }
+function taskFromRow(row) { if (!row) return null; const { identity_code, reminder_at, reminder_tz, reminder_repeat_rule, reminder_enabled, ...task } = row; let tags = []; try { tags = JSON.parse(task.tags || "[]"); } catch {} return { ...task, completed: Boolean(task.completed), pinned: Boolean(task.pinned), tags, details: task.details || "", status: task.status || "none", reminder: reminderPublic({ reminder_at, reminder_tz, reminder_repeat_rule, reminder_enabled }) }; }
 function sanitizeTaskText(value, { field, plainLimit, encryptedLimit, required = false }) { const raw = String(value || "").trim(); if (!raw) { if (required) throw new Error(`请填写${field}`); return ""; } if (raw.startsWith(ENCRYPTION_PREFIX)) { if (!ENCRYPTED_VALUE_PATTERN.test(raw) || raw.length > encryptedLimit) throw new Error(`${field}密文无效`); return raw; } return raw.slice(0, plainLimit); }
 function sanitizeTask(input) { const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 200, encryptedLimit: 4096, required: true }); const color = COLORS.has(input.color) ? input.color : "violet"; const tags = Array.isArray(input.tags) ? [...new Set(input.tags.map((tag) => String(tag).trim().replace(/^#/, "")).filter(Boolean))].slice(0, 12) : []; const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 2000, encryptedLimit: 16000 }); const status = STATUSES.has(input.status) ? input.status : "none"; const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.dueDate || "")) ? input.dueDate : null; return { title, color, tags, details, status, dueDate, pinned: Boolean(input.pinned) }; }
 function sanitizeEncryptedTaskContent(input) { const id = Number(input.id); if (!Number.isInteger(id) || id <= 0) throw new Error("事项编号无效"); const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 0, encryptedLimit: 4096, required: true }); const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 0, encryptedLimit: 16000 }); if (!title.startsWith(ENCRYPTION_PREFIX) || (details && !details.startsWith(ENCRYPTION_PREFIX))) throw new Error("任务密文无效"); return { id, title, details }; }
 function sanitizeUpgradeTask(input) { const task = sanitizeEncryptedTaskContent(input); const updatedAt = String(input.updatedAt || ""); if (!updatedAt || updatedAt.length > 64) throw new Error("任务版本信息无效"); return { ...task, updatedAt }; }
 function taskIdFrom(pathname) { return Number(pathname.match(/^\/api\/tasks\/(\d+)$/)?.[1] || 0) || null; }
-async function taskById(db, id, identity) { return taskFromRow(await db.prepare("SELECT * FROM tasks WHERE id = ? AND identity_code = ?").bind(id, identity).first()); }
+async function taskById(db, id, identity) { return taskFromRow(await db.prepare("SELECT t.*, r.remind_at AS reminder_at, r.tz AS reminder_tz, r.repeat_rule AS reminder_repeat_rule, r.enabled AS reminder_enabled FROM tasks t LEFT JOIN task_reminders r ON r.task_id = t.id AND r.identity_code = t.identity_code WHERE t.id = ? AND t.identity_code = ?").bind(id, identity).first()); }
 
 async function issueSession(db, identityCode) { const token = randomB64(32); await db.prepare("INSERT INTO sessions (token_hash, identity_code, expires_at) VALUES (?, ?, ?)").bind(await sha256(token), identityCode, expiry()).run(); return token; }
 async function accountFromSession(request, db) { const token = cookieValue(request, "rabbittodo_session"); if (!token) return null; const row = await db.prepare("SELECT identities.* FROM sessions JOIN identities ON identities.code = sessions.identity_code WHERE sessions.token_hash = ? AND datetime(sessions.expires_at) > CURRENT_TIMESTAMP").bind(await sha256(token)).first(); return row?.status === "enabled" && row.username ? row : null; }
 async function revokeSessions(db, code) { await db.prepare("DELETE FROM sessions WHERE identity_code = ?").bind(code).run(); }
 async function adminAuthorized(request, env) { const supplied = String(request.headers.get("X-Admin-Password") || ""); if (!supplied) return false; if (env.ADMIN_PASSWORD) return timingSafeEqual(supplied, String(env.ADMIN_PASSWORD)); const hash = b64(await pbkdf2(supplied, DEFAULT_ADMIN_SALT)); return timingSafeEqual(hash, DEFAULT_ADMIN_HASH); }
+
+// --- 提醒与 Web Push ---
+const REMINDER_FREQUENCIES = new Set(["none", "daily", "weekly", "monthly"]);
+const PUSH_RECORD_SIZE = 4096;
+const SUPPORTED_TIME_ZONES = new Set(["Asia/Shanghai"]);
+
+function b64urlEncode(bytes) { return b64(bytes).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }
+function b64urlDecode(value) {
+  const str = String(value || "").replaceAll("-", "+").replaceAll("_", "/");
+  const padded = str + "=".repeat((4 - (str.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+function concatBytes(...arrays) {
+  const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const arr of arrays) { result.set(arr, offset); offset += arr.length; }
+  return result;
+}
+async function hkdf(salt, ikm, info, length) {
+  const key = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveBits"]);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: salt instanceof Uint8Array ? salt : encoder.encode(salt), info: info instanceof Uint8Array ? info : encoder.encode(info) }, key, length * 8));
+}
+
+async function webPushEncrypt(subscription, payload) {
+  const clientPublicKey = await crypto.subtle.importKey("raw", b64urlDecode(subscription.p256dh), { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const ephemeral = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const sharedSecret = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: clientPublicKey }, ephemeral.privateKey, 256));
+  const authSecret = b64urlDecode(subscription.auth);
+  const ikm = await hkdf(authSecret, sharedSecret, "Content-Encoding: auth\0", 32);
+  const ephemeralPub = new Uint8Array(await crypto.subtle.exportKey("raw", ephemeral.publicKey));
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await hkdf(salt, ikm, concatBytes(encoder.encode("Content-Encoding: aes128gcm\0"), ephemeralPub), 16);
+  const nonce = await hkdf(salt, ikm, concatBytes(encoder.encode("Content-Encoding: nonce\0"), ephemeralPub), 12);
+  const plaintext = concatBytes(encoder.encode(payload), new Uint8Array([2]));
+  const padded = concatBytes(plaintext, new Uint8Array(PUSH_RECORD_SIZE - plaintext.length));
+  const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, cryptoKey, padded));
+  const header = new Uint8Array(16 + 4 + 1 + ephemeralPub.length);
+  header.set(salt, 0);
+  new DataView(header.buffer).setUint32(16, PUSH_RECORD_SIZE);
+  header[20] = ephemeralPub.length;
+  header.set(ephemeralPub, 21);
+  return concatBytes(header, ciphertext);
+}
+
+async function vapidAuthorization(endpoint, env) {
+  const audience = new URL(endpoint).origin;
+  const header = b64urlEncode(encoder.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
+  const payload = b64urlEncode(encoder.encode(JSON.stringify({ aud: audience, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: "mailto:rabbittodo@srabbitwork.site" })));
+  const signingInput = `${header}.${payload}`;
+  const privateKey = await crypto.subtle.importKey("pkcs8", b64urlDecode(env.VAPID_PRIVATE_KEY), { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const signature = b64urlEncode(new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, privateKey, encoder.encode(signingInput))));
+  return `vapid t=${signingInput}.${signature}, k=${env.VAPID_PUBLIC_KEY}`;
+}
+
+async function sendWebPush(subscription, payload, env) {
+  if (!env?.VAPID_PRIVATE_KEY || !env?.VAPID_PUBLIC_KEY) return "unconfigured";
+  try {
+    const body = await webPushEncrypt(subscription, payload);
+    const authorization = await vapidAuthorization(subscription.endpoint, env);
+    const response = await fetch(subscription.endpoint, { method: "POST", headers: { Authorization: authorization, "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", Ttl: "86400" }, body });
+    if (response.ok || response.status === 201 || response.status === 202) return "sent";
+    // 推送服务对无效/过期订阅返回 404/410，可安全清理。
+    if (response.status === 404 || response.status === 410) return "gone";
+    return "failed";
+  } catch (error) { console.error("sendWebPush error", error); return "failed"; }
+}
+
+function sanitizeReminder(input) {
+  const raw = String(input?.reminderAt || "");
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) throw new Error("提醒时间无效");
+  // 当前仅支持上海时区；未知时区一律回退到上海，避免 Intl 抛错导致 500。
+  const tz = SUPPORTED_TIME_ZONES.has(String(input?.tz)) ? String(input.tz) : "Asia/Shanghai";
+  const rule = input?.repeatRule || { freq: "none" };
+  const freq = REMINDER_FREQUENCIES.has(rule?.freq) ? rule.freq : "none";
+  return { remindAt: parsed.toISOString(), tz, repeatRule: { freq } };
+}
+
+// 把 tz 本地时间字符串转成 UTC ISO（用 Intl 反推偏移，兼容夏令时）。
+function localToUtc(localStr, tz) {
+  const [datePart, timePart] = localStr.split("T");
+  const [y, mo, d] = datePart.split("-").map(Number);
+  const [h, mi] = (timePart || "0:0").split(":").map(Number);
+  const asUtc = Date.UTC(y, mo - 1, d, h, mi, 0);
+  const dtf = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const o = {};
+  for (const p of dtf.formatToParts(new Date(asUtc))) o[p.type] = p.value;
+  const localTs = Date.UTC(Number(o.year), Number(o.month) - 1, Number(o.day), Number(o.hour === "24" ? 0 : o.hour), Number(o.minute), 0);
+  return new Date(asUtc - (localTs - asUtc)).toISOString();
+}
+
+function addMonthsInTz(utcIso, tz, months) {
+  const dtf = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const o = {};
+  for (const p of dtf.formatToParts(new Date(utcIso))) o[p.type] = p.value;
+  const year = Number(o.year);
+  const month = Number(o.month) - 1;
+  const day = Number(o.day);
+  const hour = Number(o.hour === "24" ? 0 : o.hour);
+  const minute = Number(o.minute);
+  const total = year * 12 + month + months;
+  return localToUtc(`${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`, tz);
+}
+
+// 计算下一次触发时间（UTC ISO）。返回 null 表示不再触发（none 且已过）。
+function computeNextFireAt(remindAt, tz, repeatRule) {
+  const now = Date.now();
+  const base = Date.parse(remindAt);
+  if (Number.isNaN(base)) return null;
+  const freq = repeatRule?.freq || "none";
+  if (freq === "none") return base > now ? new Date(base).toISOString() : null;
+  if (base >= now) return new Date(base).toISOString();
+  const stepMs = freq === "daily" ? 86_400_000 : freq === "weekly" ? 604_800_000 : null;
+  if (stepMs) {
+    const steps = Math.floor((now - base) / stepMs);
+    let candidate = base + steps * stepMs;
+    while (candidate <= now) candidate += stepMs;
+    return new Date(candidate).toISOString();
+  }
+  if (freq === "monthly") {
+    let candidate = new Date(base).toISOString();
+    let guard = 0;
+    while (Date.parse(candidate) <= now && guard < 600) { candidate = addMonthsInTz(candidate, tz, 1); guard += 1; }
+    return guard < 600 ? candidate : null;
+  }
+  return null;
+}
+
+function reminderPublic(row) {
+  if (!row || !row.reminder_at) return null;
+  let rule = { freq: "none" };
+  try { rule = JSON.parse(row.reminder_repeat_rule || "{\"freq\":\"none\"}"); } catch {}
+  return { remindAt: row.reminder_at, tz: row.reminder_tz, repeatRule: rule, enabled: Boolean(row.reminder_enabled) };
+}
+
+// 写入一条提醒（upsert），并计算 next_fire_at。
+// 不重复且时间已过的提醒会立即排入下一次 Cron，触发一次后自动停用。
+async function upsertReminder(db, identity, taskId, reminder) {
+  const next = computeNextFireAt(reminder.remindAt, reminder.tz, reminder.repeatRule);
+  const reminderId = `r_${b64(crypto.getRandomValues(new Uint8Array(16))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "")}`;
+  await db.prepare("DELETE FROM task_reminders WHERE identity_code = ? AND task_id = ?").bind(identity, taskId).run();
+  await db.prepare("INSERT INTO task_reminders (reminder_id, identity_code, task_id, remind_at, tz, repeat_rule, next_fire_at, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind(reminderId, identity, taskId, reminder.remindAt, reminder.tz, JSON.stringify(reminder.repeatRule), next || new Date().toISOString()).run();
+}
+
+async function fireDueReminders(env) {
+  const db = env.DB;
+  const now = new Date().toISOString();
+  // 已完成任务不再推送提醒；防御性 JOIN，避免历史遗留的已完成任务提醒继续触发。
+  const { results } = await db.prepare("SELECT r.* FROM task_reminders r JOIN tasks t ON t.id = r.task_id AND t.identity_code = r.identity_code WHERE r.enabled = 1 AND r.next_fire_at <= ? AND t.completed = 0").bind(now).all();
+  for (const reminder of results) {
+    const { results: subs } = await db.prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE identity_code = ?").bind(reminder.identity_code).all();
+    let rule = { freq: "none" };
+    try { rule = JSON.parse(reminder.repeat_rule || "{\"freq\":\"none\"}"); } catch {}
+    let delivered = false;
+    const gone = [];
+    for (const sub of subs) {
+      const outcome = await sendWebPush(sub, JSON.stringify({ title: "RabbitToDo", body: "你有一条待办提醒" }), env);
+      if (outcome === "sent") delivered = true;
+      else if (outcome === "gone") gone.push(sub.endpoint);
+    }
+    if (gone.length) {
+      await db.prepare(`DELETE FROM push_subscriptions WHERE identity_code = ? AND endpoint IN (${gone.map(() => "?").join(",")})`).bind(reminder.identity_code, ...gone).run();
+    }
+    // 有订阅但推送失败时保留 next_fire_at，由下一次 Cron 继续重试，避免提醒丢失。
+    // 无订阅（subs.length === 0）时没有可送达设备，重试只会让每条过期提醒每分钟空转、放大 D1 读取；
+    // 页面打开时的提醒由前端本地横幅负责（public/app.js checkDueReminders），此处按已处理推进/停用。
+    if (!delivered && subs.length > 0) continue;
+    const next = computeNextFireAt(reminder.remind_at, reminder.tz, rule);
+    if (next) await db.prepare("UPDATE task_reminders SET next_fire_at = ?, last_fired_at = ?, updated_at = CURRENT_TIMESTAMP WHERE reminder_id = ?").bind(next, now, reminder.reminder_id).run();
+    else await db.prepare("UPDATE task_reminders SET enabled = 0, last_fired_at = ?, updated_at = CURRENT_TIMESTAMP WHERE reminder_id = ?").bind(now, reminder.reminder_id).run();
+  }
+}
 
 async function authApi(request, env, url) {
   const db = env.DB; const { pathname } = url;
@@ -165,21 +342,32 @@ async function adminApi(request, env, pathname) {
 
 async function taskApi(request, env, url, account) {
   const db = env.DB, identity = account.code, { pathname } = url;
-  if (request.method === "GET" && pathname === "/api/tasks") { const { results } = await db.prepare("SELECT * FROM tasks WHERE identity_code = ? ORDER BY id DESC").bind(identity).all(); return json({ tasks: results.map(taskFromRow) }); }
+  if (request.method === "GET" && pathname === "/api/tasks") { const { results } = await db.prepare("SELECT t.*, r.remind_at AS reminder_at, r.tz AS reminder_tz, r.repeat_rule AS reminder_repeat_rule, r.enabled AS reminder_enabled FROM tasks t LEFT JOIN task_reminders r ON r.task_id = t.id AND r.identity_code = t.identity_code WHERE t.identity_code = ? ORDER BY t.id DESC").bind(identity).all(); return json({ tasks: results.map(taskFromRow) }); }
   if (request.method === "POST" && pathname === "/api/tasks") {
-    const task = sanitizeTask(await bodyFrom(request));
+    const body = await bodyFrom(request);
+    const task = sanitizeTask(body);
+    const reminder = body.reminderAt ? sanitizeReminder(body) : null;
     const mutationId = String(request.headers.get("X-RabbitTodo-Mutation") || "");
     if (mutationId && !/^[A-Za-z0-9_-]{16,128}$/.test(mutationId)) return json({ error: "同步操作编号无效" }, 400);
     if (mutationId) {
-      const existing = await db.prepare("SELECT * FROM tasks WHERE identity_code = ? AND client_mutation_id = ?").bind(identity, mutationId).first();
+      const existing = await db.prepare("SELECT t.*, r.remind_at AS reminder_at, r.tz AS reminder_tz, r.repeat_rule AS reminder_repeat_rule, r.enabled AS reminder_enabled FROM tasks t LEFT JOIN task_reminders r ON r.task_id = t.id AND r.identity_code = t.identity_code WHERE t.identity_code = ? AND t.client_mutation_id = ?").bind(identity, mutationId).first();
       if (existing) return json({ task: taskFromRow(existing), replayed: true });
     }
     try {
       const result = await db.prepare("INSERT INTO tasks (identity_code, title, color, tags, details, status, due_date, pinned, pinned_at, client_mutation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, ?)").bind(identity, task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, task.pinned ? 1 : 0, task.pinned ? 1 : 0, mutationId || null).run();
-      return json({ task: await taskById(db, Number(result.meta.last_row_id), identity) }, 201);
+      const newId = Number(result.meta.last_row_id);
+      if (reminder) {
+        try { await upsertReminder(db, identity, newId, reminder); }
+        catch (error) {
+          // 提醒写入失败时回滚任务，避免客户端重试时拿到"无提醒"的已完成任务并覆盖本地提醒。
+          await db.prepare("DELETE FROM tasks WHERE id = ? AND identity_code = ?").bind(newId, identity).run();
+          throw error;
+        }
+      }
+      return json({ task: await taskById(db, newId, identity) }, 201);
     } catch (error) {
       if (!mutationId || !String(error).includes("tasks.identity_code, tasks.client_mutation_id")) throw error;
-      const existing = await db.prepare("SELECT * FROM tasks WHERE identity_code = ? AND client_mutation_id = ?").bind(identity, mutationId).first();
+      const existing = await db.prepare("SELECT t.*, r.remind_at AS reminder_at, r.tz AS reminder_tz, r.repeat_rule AS reminder_repeat_rule, r.enabled AS reminder_enabled FROM tasks t LEFT JOIN task_reminders r ON r.task_id = t.id AND r.identity_code = t.identity_code WHERE t.identity_code = ? AND t.client_mutation_id = ?").bind(identity, mutationId).first();
       if (!existing) throw error;
       return json({ task: taskFromRow(existing), replayed: true });
     }
@@ -211,9 +399,53 @@ async function taskApi(request, env, url, account) {
     return json({ ok: true });
   }
   const id = taskIdFrom(pathname); if (!id) return json({ error: "未找到接口" }, 404);
-  if (request.method === "PUT") { const task = sanitizeTask(await bodyFrom(request)); const result = await db.prepare("UPDATE tasks SET title = ?, color = ?, tags = ?, details = ?, status = ?, due_date = ?, pinned = ?, pinned_at = CASE WHEN ? = 0 THEN NULL WHEN pinned_at IS NULL THEN CURRENT_TIMESTAMP ELSE pinned_at END, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?").bind(task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, task.pinned ? 1 : 0, task.pinned ? 1 : 0, id, identity).run(); return result.meta.changes ? json({ task: await taskById(db, id, identity) }) : json({ error: "事项不存在" }, 404); }
-  if (request.method === "PATCH") { const { completed, status } = await bodyFrom(request); let result; if (typeof completed === "boolean") result = await db.prepare("UPDATE tasks SET completed = ?, completed_at = ?, status = CASE WHEN ? THEN 'none' ELSE status END, manual_position = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?").bind(completed ? 1 : 0, completed ? new Date().toISOString() : null, completed ? 1 : 0, id, identity).run(); else if (STATUSES.has(status)) result = await db.prepare("UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?").bind(status, id, identity).run(); else return json({ error: "任务状态无效" }, 400); return result.meta.changes ? json({ task: await taskById(db, id, identity) }) : json({ error: "事项不存在" }, 404); }
-  if (request.method === "DELETE") { await db.prepare("DELETE FROM tasks WHERE id = ? AND identity_code = ?").bind(id, identity).run(); return json({ ok: true }); }
+  if (request.method === "PUT") {
+    const body = await bodyFrom(request);
+    const task = sanitizeTask(body);
+    const result = await db.prepare("UPDATE tasks SET title = ?, color = ?, tags = ?, details = ?, status = ?, due_date = ?, pinned = ?, pinned_at = CASE WHEN ? = 0 THEN NULL WHEN pinned_at IS NULL THEN CURRENT_TIMESTAMP ELSE pinned_at END, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?").bind(task.title, task.color, JSON.stringify(task.tags), task.details, task.status, task.dueDate, task.pinned ? 1 : 0, task.pinned ? 1 : 0, id, identity).run();
+    if (!result.meta.changes) return json({ error: "事项不存在" }, 404);
+    if (body.reminderAt) await upsertReminder(db, identity, id, sanitizeReminder(body));
+    else if ("reminderAt" in body) await db.prepare("DELETE FROM task_reminders WHERE identity_code = ? AND task_id = ?").bind(identity, id).run();
+    return json({ task: await taskById(db, id, identity) });
+  }
+  if (request.method === "PATCH") {
+    const { completed, status } = await bodyFrom(request);
+    let result;
+    if (typeof completed === "boolean") {
+      result = await db.prepare("UPDATE tasks SET completed = ?, completed_at = ?, status = CASE WHEN ? THEN 'none' ELSE status END, manual_position = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?").bind(completed ? 1 : 0, completed ? new Date().toISOString() : null, completed ? 1 : 0, id, identity).run();
+      // 完成任务即视为已处理：删除其提醒，避免继续推送或残留无效记录。
+      if (result.meta.changes && completed) await db.prepare("DELETE FROM task_reminders WHERE identity_code = ? AND task_id = ?").bind(identity, id).run();
+    } else if (STATUSES.has(status)) result = await db.prepare("UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?").bind(status, id, identity).run();
+    else return json({ error: "任务状态无效" }, 400);
+    return result.meta.changes ? json({ task: await taskById(db, id, identity) }) : json({ error: "事项不存在" }, 404);
+  }
+  if (request.method === "DELETE") { await db.batch([db.prepare("DELETE FROM task_reminders WHERE task_id = ? AND identity_code = ?").bind(id, identity), db.prepare("DELETE FROM tasks WHERE id = ? AND identity_code = ?").bind(id, identity)]); return json({ ok: true }); }
+  return json({ error: "未找到接口" }, 404);
+}
+
+async function pushApi(request, env, url, account) {
+  const db = env.DB, identity = account.code, { pathname } = url;
+  if (request.method === "GET" && pathname === "/api/push/vapid") {
+    return json({ publicKey: env.VAPID_PUBLIC_KEY || "" });
+  }
+  if (request.method === "GET" && pathname === "/api/push/status") {
+    const { results } = await db.prepare("SELECT endpoint FROM push_subscriptions WHERE identity_code = ?").bind(identity).all();
+    return json({ vapidConfigured: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY), subscribed: results.length > 0, endpoints: results.length });
+  }
+  if (request.method === "POST" && pathname === "/api/push/subscribe") {
+    const { endpoint, p256dh, auth, userAgent } = await bodyFrom(request);
+    if (!endpoint || !p256dh || !auth) return json({ error: "推送订阅信息不完整" }, 400);
+    const subId = `s_${b64(crypto.getRandomValues(new Uint8Array(16))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "")}`;
+    await db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").bind(endpoint).run();
+    await db.prepare("INSERT INTO push_subscriptions (subscription_id, identity_code, endpoint, p256dh, auth, user_agent) VALUES (?, ?, ?, ?, ?, ?)").bind(subId, identity, endpoint, p256dh, auth, userAgent || null).run();
+    return json({ ok: true }, 201);
+  }
+  if (request.method === "POST" && pathname === "/api/push/unsubscribe") {
+    const { endpoint } = await bodyFrom(request);
+    if (!endpoint) return json({ error: "缺少推送订阅地址" }, 400);
+    await db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ? AND identity_code = ?").bind(endpoint, identity).run();
+    return json({ ok: true });
+  }
   return json({ error: "未找到接口" }, 404);
 }
 
@@ -223,7 +455,11 @@ async function api(request, env, url) {
   if (pathname.startsWith("/api/admin/")) return adminApi(request, env, pathname);
   if (pathname.startsWith("/api/auth/")) { const response = await authApi(request, env, url); if (response) return response; }
   const account = await accountFromSession(request, env.DB); if (!account) return json({ error: "请登录" }, 401, { "Set-Cookie": clearSessionCookie(request) }); if (account.status !== "enabled") return json({ error: "账号已禁用" }, 403);
+  if (pathname.startsWith("/api/push/")) return pushApi(request, env, url, account);
   return taskApi(request, env, url, account);
 }
 
-export default { async fetch(request, env) { const url = new URL(request.url); try { if (url.pathname.startsWith("/api/")) return await api(request, env, url); if (url.pathname === "/console") return Response.redirect(`${url.origin}/console/`, 308); return env.ASSETS.fetch(request); } catch (error) { console.error(error); return json({ error: error instanceof Error ? error.message : "服务器暂时不可用" }, 500); } } };
+export default {
+  async fetch(request, env) { const url = new URL(request.url); try { if (url.pathname.startsWith("/api/")) return await api(request, env, url); if (url.pathname === "/console") return Response.redirect(`${url.origin}/console/`, 308); return env.ASSETS.fetch(request); } catch (error) { console.error(error); return json({ error: error instanceof Error ? error.message : "服务器暂时不可用" }, 500); } },
+  async scheduled(event, env, ctx) { ctx.waitUntil(fireDueReminders(env)); }
+};
