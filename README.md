@@ -6,8 +6,8 @@ RabbitToDo 是一个面向个人使用的轻量待办 PWA，围绕"快速记录�
 
 当前 2.4 本地开发基线：
 
-- Git commit：`62bde7d`（2.4 提交后更新为 2.4 基线 commit）
-- 应用版本：`v20260805.203948`
+- Git commit：`a40658d`
+- 应用版本：`v20260805.225607`
 - Service Worker 缓存：`rabbittodo-v79`
 - 数据平台：Cloudflare Workers + D1
 - 源代码：GitHub `suddenrabbit/rabbittodo`
@@ -196,6 +196,8 @@ pnpm exec wrangler secret put VAPID_PUBLIC_KEY
 pnpm exec wrangler deployments list
 pnpm exec wrangler d1 time-travel info rabbittodo
 ```
+
+需要完整 SQL 备份时执行 `pnpm run db:backup:remote`（默认写入 `backups/<时间戳>/`，导出远程 D1 全量 schema 与数据，并尝试一并记录 Time Travel bookmark 供回退参考）。
 
 
 包含新 migration 的推荐发布顺序是：记录上述回退点，执行 `pnpm run db:migrate:remote`，确认成功后再部署代码，并完成登录、任务读取和管理后台烟雾测试。纯前端或纯 Worker 修复不重复执行无关 migration。

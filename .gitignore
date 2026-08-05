@@ -1,5 +1,6 @@
 node_modules/
 .wrangler/
+backups/
 .dev.vars
 .DS_Store
 *.sqlite
