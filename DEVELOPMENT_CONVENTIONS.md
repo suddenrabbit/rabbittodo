@@ -145,7 +145,7 @@ docs: summarize version 2.0 workflow
 - 待办先分置顶区与普通区；每个区内手动排序优先，未记录手动位置时只按创建时间正序，新增任务在队尾。已办只按完成时间倒序，禁止手动拖动排序。尚未同步的新建任务允许临时拖动，但不得写入本地或远端排序记录；创建成功后按新建任务规则落到队尾。
 - 计划完成日期等日期展示使用 `dateLabel` 统一格式化：月、日不带前导零（如 `8月3日`），当年日期不显示年份，跨年日期带年份（如 `2025年12月31日`），当天显示“今天”；底层存储仍为 `YYYY-MM-DD`。
 - 提醒时间当前仅支持上海时区；重复规则为不重复/每天/每周/每月。提醒数据只存在 D1 的 `task_reminders` 表（每任务最多一条），推送订阅只存在 `push_subscriptions` 表，不允许新增与既有任务表耦合的提醒字段。
-- 页面打开时的提醒由前端本地检查负责（`checkDueReminders`，25 秒节流，不发起 API 请求），本地 `fireKey` 防重；页面关闭时的提醒由 Worker Cron（`* * * * *`）扫描 `next_fire_at` 推送。本地 `wrangler dev` 不自动触发 Cron，需手动 `curl http://localhost:8792/cdn-cgi/handler/scheduled` 验证。
+- 页面打开时的提醒由前端本地检查负责（`checkDueReminders`，25 秒节流，不发起 API 请求），本地 `fireKey` 防重；页面关闭时的提醒由 Worker Cron（`* * * * *`）扫描 `next_fire_at` 推送。设置提醒时间时前端顺带检查通知状态，未开启则在用户手势中请求权限并注册推送（已拒绝时静默跳过）。本地 `wrangler dev` 不自动触发 Cron，需手动 `curl http://localhost:8792/cdn-cgi/handler/scheduled` 验证。
 - 后台推送在推送瞬间临时解密 `rtenc:v2` 任务标题，通知显示真实任务标题（明文只在内存与推送负载，不落库）；v1 或非密文标题回退通用文案 `RabbitToDo / 你有一条待办提醒`，不允许因解密失败报错或吞提醒。
 - 推送失败（非 404/410）必须保留 `next_fire_at` 继续重试，不得吞提醒；无订阅时没有可送达设备，不重复提醒置 `enabled=0` 停用、重复提醒推进 `next_fire_at`，禁止每分钟空转重试。推送服务返回 404/410 时清理订阅；完成任务、删除任务或清除提醒时同步停用/删除提醒。
 - 推送密钥通过 Secret 提供：本地 `.dev.vars`（`VAPID_PRIVATE_KEY`、`VAPID_PUBLIC_KEY`），生产 `wrangler secret put`。Cron 每分钟固定 1440 次请求计入 Workers Free 每日 10 万请求额度（约 1.44%），调整 `triggers.crons` 时需同步评估额度与提醒准时性。

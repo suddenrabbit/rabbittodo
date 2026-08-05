@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260805.225607";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v79";
+const APP_VERSION = "v20260805.233043";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v80";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -544,12 +544,11 @@ function pushSubscriptionKeys(subscription) {
 }
 
 // 已授权时静默订阅 Web Push（不请求权限；Safari 等浏览器要求 requestPermission 在用户手势中调用）。
-async function subscribeIfPermitted() {
+// onlyIfMissing 用于提醒设置等补充检查：本机已有有效订阅时直接返回，不重复向服务器注册。
+async function subscribeIfPermitted({ onlyIfMissing = false } = {}) {
   if (!serviceWorkerRegistration || !("PushManager" in window)) return false;
   if (!("Notification" in window) || Notification.permission !== "granted") return false;
   try {
-    const publicKey = await fetchVapidPublicKey();
-    if (!publicKey) return false;
     let subscription = await serviceWorkerRegistration.pushManager.getSubscription();
     // 旧订阅可能缺少 p256dh/auth（例如由旧版本或旧 VAPID 密钥创建），缺少密钥时服务端无法推送，直接退订重建。
     if (subscription) {
@@ -559,6 +558,9 @@ async function subscribeIfPermitted() {
         subscription = null;
       }
     }
+    if (subscription && onlyIfMissing) return true;
+    const publicKey = await fetchVapidPublicKey();
+    if (!publicKey) return false;
     if (!subscription) subscription = await serviceWorkerRegistration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
     const keys = pushSubscriptionKeys(subscription);
     if (!subscription.endpoint || !keys.p256dh || !keys.auth) return false;
@@ -588,6 +590,20 @@ async function requestNotificationPermission() {
     }
     else if (permission === "denied") alert("通知权限被拒绝，请在浏览器设置中手动开启");
   } catch (error) { console.error("requestNotificationPermission", error); }
+}
+
+// 设置提醒时间时顺带检查通知状态：未开启则在用户手势中请求权限并静默注册推送，不打断提醒设置。
+async function ensureNotificationsEnabled() {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "granted") { await subscribeIfPermitted({ onlyIfMissing: true }); return; }
+  if (Notification.permission === "denied") return;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission === "granted") {
+      await subscribeIfPermitted();
+      refreshPushStatus();
+    }
+  } catch (error) { console.error("ensureNotificationsEnabled", error); }
 }
 
 // 登出时取消本机订阅并通知服务器删除记录。
@@ -1810,6 +1826,7 @@ app.addEventListener("click", async (event) => {
       const utcIso = new Date(`${localStr}+08:00`).toISOString();
       state.editor.reminder = { remindAt: utcIso, tz: SHANGHAI_TIME_ZONE, repeatRule: { freq: p.freq }, enabled: true };
       state.reminderPicker = null;
+      ensureNotificationsEnabled();
       return render();
     }
     if (action === "remove-tag") { state.draftTags = state.draftTags.filter((tag) => tag !== button.dataset.tag); return render(); }
