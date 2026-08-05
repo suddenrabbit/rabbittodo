@@ -1,4 +1,4 @@
-# RabbitToDo 2.3 开发与发布约定
+# RabbitToDo 2.4 开发与发布约定
 
 本文件是 RabbitToDo 后续对话和开发工作的固定协作基线。除非用户明确修改约定，否则持续遵循。
 
@@ -10,7 +10,7 @@
 - 本地验证：使用已有用户名密码账号验证持续登录，并按需验证新用户名注册。
 - 生产域名：`https://todo.srabbitwork.site`
 - 生产数据库：Cloudflare D1，名称 `rabbittodo`，绑定名 `DB`
-- 当前 2.3 本地开发基线：commit `13af4cc`，应用版本 `v20260804.172111`，Service Worker `rabbittodo-v72`
+- 当前 2.4 本地开发基线：commit `62bde7d`（2.4 提交后更新为 2.4 基线 commit），应用版本 `v20260805.203948`，Service Worker `rabbittodo-v79`
 - 2.2 已上线基线：commit `4150cfa`，应用版本 `v20260803.141847`，Service Worker `rabbittodo-v62`
 - 2.0 生产起点（兼容与回退边界）：commit `e2498f7`，应用版本 `v20260801.110605`，Service Worker `rabbittodo-v43`
 - 用户通常通过 GitHub Desktop 将本地 commit 推送到 GitHub。
@@ -132,9 +132,10 @@ docs: summarize version 2.0 workflow
 - 新用户名经一次密码确认后自动注册并启用，不再审批；管理员仍可启用或禁用账号。migration 自动启用历史 `pending`，保留 `disabled`。
 - 已登录设备将用户名、解锁材料、已解密任务快照和待同步操作持久化在 IndexedDB，以便 PWA 被系统回收后立即恢复；退出登录时清除这些本地数据。
 - 加密范围只有标题与详情；标签、日期、颜色、状态、完成信息和排序字段保持明文。
-- 浏览器端任务内容使用 PBKDF2-SHA-256、120,000 次迭代派生 AES-GCM 密钥；这段逻辑只在浏览器执行。
-- Worker 端密码哈希使用 PBKDF2-SHA-256、100,000 次迭代，并在 `password_params` 中记录参数。Cloudflare Workers 会拒绝超过 100,000 次的 PBKDF2 请求，禁止恢复为 210,000 或让后台默认密码校验使用更高迭代数。
-- 旧明文任务由客户端按需后台迁移，正常密文任务不会重复回写。
+- 浏览器端新写入的任务内容使用 `rtenc:v2`：身份码去掉 `u_` 后 base64url 解码得到的 32 字节即密钥材料，用 HKDF-SHA256（salt `RabbitToDo task content v2`、info `task-content`）派生 AES-GCM 密钥，无迭代次数；密文格式为 `rtenc:v2:` + base64(iv || ciphertext)。
+- 旧 `rtenc:v1` 密文（PBKDF2-SHA-256、120,000 次迭代）继续可读，不再用于新写入；该派生只在浏览器执行。
+- Worker 端密码哈希使用 PBKDF2-SHA-256、100,000 次迭代，并在 `password_params` 中记录参数。Cloudflare Workers 会拒绝超过 100,000 次的 PBKDF2 请求，禁止恢复为 210,000 或让后台默认密码校验使用更高迭代数。Worker 推送解密只处理 `rtenc:v2`（HKDF 派生，无迭代上限问题），不得在 Worker 运行 v1 的 120,000 次 PBKDF2 派生。
+- 旧明文任务由客户端按需后台迁移，正常密文任务不会重复回写；`rtenc:v1` → `rtenc:v2` 由客户端读取任务后按前缀自动后台迁移（走 `saveInBackground`、按 50 条分批调 `/api/tasks/encrypt`，不进 outbox），用户无感知。
 - 管理后台默认密码只允许以哈希常量保留回退，不在源码保存明文；当前约定口令仍为 `zhoumeng1987`。
 - 系统不使用 `SERVER_MASTER_KEY` 或其他额外服务器主密钥。内部身份码保存在 D1 并作为固定加密种子；修改密码和管理员重置不得改变它。
 - 会话 Cookie 为 HttpOnly、SameSite=Lax，闲置 180 天过期；设置与续期时同时下发 `Expires` 与 `Max-Age`，清除时使用 `Max-Age=0` 且 `Expires` 设为过去时间。每次前台会话恢复自动续期，多个设备可同时登录。改密码、管理员重置和禁用账号仍撤销会话。`SameSite=Lax` 仍能阻止跨站 POST/PUT/DELETE 携带 Cookie（CSRF 保护），同时允许外部链接与书签的顶层 GET 导航携带会话 Cookie，避免 PC 浏览器丢失登录态。
@@ -145,5 +146,6 @@ docs: summarize version 2.0 workflow
 - 计划完成日期等日期展示使用 `dateLabel` 统一格式化：月、日不带前导零（如 `8月3日`），当年日期不显示年份，跨年日期带年份（如 `2025年12月31日`），当天显示“今天”；底层存储仍为 `YYYY-MM-DD`。
 - 提醒时间当前仅支持上海时区；重复规则为不重复/每天/每周/每月。提醒数据只存在 D1 的 `task_reminders` 表（每任务最多一条），推送订阅只存在 `push_subscriptions` 表，不允许新增与既有任务表耦合的提醒字段。
 - 页面打开时的提醒由前端本地检查负责（`checkDueReminders`，25 秒节流，不发起 API 请求），本地 `fireKey` 防重；页面关闭时的提醒由 Worker Cron（`* * * * *`）扫描 `next_fire_at` 推送。本地 `wrangler dev` 不自动触发 Cron，需手动 `curl http://localhost:8792/cdn-cgi/handler/scheduled` 验证。
+- 后台推送在推送瞬间临时解密 `rtenc:v2` 任务标题，通知显示真实任务标题（明文只在内存与推送负载，不落库）；v1 或非密文标题回退通用文案 `RabbitToDo / 你有一条待办提醒`，不允许因解密失败报错或吞提醒。
 - 推送失败（非 404/410）必须保留 `next_fire_at` 继续重试，不得吞提醒；无订阅时没有可送达设备，不重复提醒置 `enabled=0` 停用、重复提醒推进 `next_fire_at`，禁止每分钟空转重试。推送服务返回 404/410 时清理订阅；完成任务、删除任务或清除提醒时同步停用/删除提醒。
 - 推送密钥通过 Secret 提供：本地 `.dev.vars`（`VAPID_PRIVATE_KEY`、`VAPID_PUBLIC_KEY`），生产 `wrangler secret put`。Cron 每分钟固定 1440 次请求计入 Workers Free 每日 10 万请求额度（约 1.44%），调整 `triggers.crons` 时需同步评估额度与提醒准时性。

@@ -2,7 +2,10 @@ const COLORS = new Set(["violet", "mint", "orange", "blue", "rose"]);
 const STATUSES = new Set(["none", "in_progress", "paused"]);
 const USERNAME_PATTERN = /^[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_]{1,9}$/u;
 const ENCRYPTION_PREFIX = "rtenc:v1:";
-const ENCRYPTED_VALUE_PATTERN = /^rtenc:v1:[A-Za-z0-9+/]+={0,2}$/;
+const ENCRYPTION_PREFIX_V2 = "rtenc:v2:";
+const ENCRYPTED_VALUE_PATTERN = /^rtenc:(v1|v2):[A-Za-z0-9+/]+={0,2}$/;
+const ENCRYPTION_SALT_V2 = "RabbitToDo task content v2";
+const ENCRYPTION_INFO_V2 = "task-content";
 const INTERNAL_IDENTITY_PATTERN = /^u_[A-Za-z0-9_-]{43}$/;
 // Cloudflare Workers rejects PBKDF2 iteration counts above 100,000.
 const PASSWORD_ITERATIONS = 100_000;
@@ -49,9 +52,10 @@ function recordFailure(key) {
 function clearFailure(key) { authFailures.delete(key); }
 function publicAccount(row, includeSeed = true) { return { username: row.username, ...(includeSeed ? { encryptionSeed: row.code } : {}) }; }
 function taskFromRow(row) { if (!row) return null; const { identity_code, reminder_at, reminder_tz, reminder_repeat_rule, reminder_enabled, ...task } = row; let tags = []; try { tags = JSON.parse(task.tags || "[]"); } catch {} return { ...task, completed: Boolean(task.completed), pinned: Boolean(task.pinned), tags, details: task.details || "", status: task.status || "none", reminder: reminderPublic({ reminder_at, reminder_tz, reminder_repeat_rule, reminder_enabled }) }; }
-function sanitizeTaskText(value, { field, plainLimit, encryptedLimit, required = false }) { const raw = String(value || "").trim(); if (!raw) { if (required) throw new Error(`请填写${field}`); return ""; } if (raw.startsWith(ENCRYPTION_PREFIX)) { if (!ENCRYPTED_VALUE_PATTERN.test(raw) || raw.length > encryptedLimit) throw new Error(`${field}密文无效`); return raw; } return raw.slice(0, plainLimit); }
+function isEncryptedValue(value) { const raw = String(value || ""); return raw.startsWith(ENCRYPTION_PREFIX) || raw.startsWith(ENCRYPTION_PREFIX_V2); }
+function sanitizeTaskText(value, { field, plainLimit, encryptedLimit, required = false }) { const raw = String(value || "").trim(); if (!raw) { if (required) throw new Error(`请填写${field}`); return ""; } if (isEncryptedValue(raw)) { if (!ENCRYPTED_VALUE_PATTERN.test(raw) || raw.length > encryptedLimit) throw new Error(`${field}密文无效`); return raw; } return raw.slice(0, plainLimit); }
 function sanitizeTask(input) { const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 200, encryptedLimit: 4096, required: true }); const color = COLORS.has(input.color) ? input.color : "violet"; const tags = Array.isArray(input.tags) ? [...new Set(input.tags.map((tag) => String(tag).trim().replace(/^#/, "")).filter(Boolean))].slice(0, 12) : []; const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 2000, encryptedLimit: 16000 }); const status = STATUSES.has(input.status) ? input.status : "none"; const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.dueDate || "")) ? input.dueDate : null; return { title, color, tags, details, status, dueDate, pinned: Boolean(input.pinned) }; }
-function sanitizeEncryptedTaskContent(input) { const id = Number(input.id); if (!Number.isInteger(id) || id <= 0) throw new Error("事项编号无效"); const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 0, encryptedLimit: 4096, required: true }); const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 0, encryptedLimit: 16000 }); if (!title.startsWith(ENCRYPTION_PREFIX) || (details && !details.startsWith(ENCRYPTION_PREFIX))) throw new Error("任务密文无效"); return { id, title, details }; }
+function sanitizeEncryptedTaskContent(input) { const id = Number(input.id); if (!Number.isInteger(id) || id <= 0) throw new Error("事项编号无效"); const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 0, encryptedLimit: 4096, required: true }); const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 0, encryptedLimit: 16000 }); if (!isEncryptedValue(title) || (details && !isEncryptedValue(details))) throw new Error("任务密文无效"); return { id, title, details }; }
 function sanitizeUpgradeTask(input) { const task = sanitizeEncryptedTaskContent(input); const updatedAt = String(input.updatedAt || ""); if (!updatedAt || updatedAt.length > 64) throw new Error("任务版本信息无效"); return { ...task, updatedAt }; }
 function taskIdFrom(pathname) { return Number(pathname.match(/^\/api\/tasks\/(\d+)$/)?.[1] || 0) || null; }
 async function taskById(db, id, identity) { return taskFromRow(await db.prepare("SELECT t.*, r.remind_at AS reminder_at, r.tz AS reminder_tz, r.repeat_rule AS reminder_repeat_rule, r.enabled AS reminder_enabled FROM tasks t LEFT JOIN task_reminders r ON r.task_id = t.id AND r.identity_code = t.identity_code WHERE t.id = ? AND t.identity_code = ?").bind(id, identity).first()); }
@@ -220,19 +224,36 @@ async function upsertReminder(db, identity, taskId, reminder) {
   await db.prepare("INSERT INTO task_reminders (reminder_id, identity_code, task_id, remind_at, tz, repeat_rule, next_fire_at, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind(reminderId, identity, taskId, reminder.remindAt, reminder.tz, JSON.stringify(reminder.repeatRule), next || new Date().toISOString()).run();
 }
 
+// 推送瞬间临时解密 rtenc:v2 标题；v1（PBKDF2 120k 超出 Worker 上限）或非密文一律回退通用文案。
+async function decryptTaskTitle(title, identityCode) {
+  const stored = String(title || "");
+  if (!stored.startsWith(ENCRYPTION_PREFIX_V2)) return null;
+  try {
+    const key = await hkdf(ENCRYPTION_SALT_V2, b64urlDecode(String(identityCode || "").replace(/^u_/, "")), ENCRYPTION_INFO_V2, 32);
+    const packed = b64urlDecode(stored.slice(ENCRYPTION_PREFIX_V2.length));
+    const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["decrypt"]);
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: packed.slice(0, 12) }, cryptoKey, packed.slice(12));
+    return new TextDecoder().decode(decrypted) || null;
+  } catch {
+    return null;
+  }
+}
+
 async function fireDueReminders(env) {
   const db = env.DB;
   const now = new Date().toISOString();
   // 已完成任务不再推送提醒；防御性 JOIN，避免历史遗留的已完成任务提醒继续触发。
-  const { results } = await db.prepare("SELECT r.* FROM task_reminders r JOIN tasks t ON t.id = r.task_id AND t.identity_code = r.identity_code WHERE r.enabled = 1 AND r.next_fire_at <= ? AND t.completed = 0").bind(now).all();
+  const { results } = await db.prepare("SELECT r.*, t.title AS task_title FROM task_reminders r JOIN tasks t ON t.id = r.task_id AND t.identity_code = r.identity_code WHERE r.enabled = 1 AND r.next_fire_at <= ? AND t.completed = 0").bind(now).all();
   for (const reminder of results) {
     const { results: subs } = await db.prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE identity_code = ?").bind(reminder.identity_code).all();
     let rule = { freq: "none" };
     try { rule = JSON.parse(reminder.repeat_rule || "{\"freq\":\"none\"}"); } catch {}
+    const taskTitle = await decryptTaskTitle(reminder.task_title, reminder.identity_code);
+    const payload = taskTitle ? { title: taskTitle, body: "提醒时间到啦" } : { title: "RabbitToDo", body: "你有一条待办提醒" };
     let delivered = false;
     const gone = [];
     for (const sub of subs) {
-      const outcome = await sendWebPush(sub, JSON.stringify({ title: "RabbitToDo", body: "你有一条待办提醒" }), env);
+      const outcome = await sendWebPush(sub, JSON.stringify(payload), env);
       if (outcome === "sent") delivered = true;
       else if (outcome === "gone") gone.push(sub.endpoint);
     }

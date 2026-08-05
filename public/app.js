@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260805.200314";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v77";
+const APP_VERSION = "v20260805.225607";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v79";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -11,7 +11,10 @@ const LOCAL_STORE_KEY = "active-account";
 const SYNC_RETRY_DELAYS = [5_000, 30_000, 120_000, 600_000];
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 const ENCRYPTION_PREFIX = "rtenc:v1:";
+const ENCRYPTION_PREFIX_V2 = "rtenc:v2:";
 const ENCRYPTION_SALT = "RabbitToDo task content v1";
+const ENCRYPTION_SALT_V2 = "RabbitToDo task content v2";
+const ENCRYPTION_INFO_V2 = "task-content";
 const ENCRYPTION_ITERATIONS = 120_000;
 const USERNAME_PATTERN = /^[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_]{1,9}$/u;
 const app = document.querySelector("#app");
@@ -62,6 +65,8 @@ let dragAutoScrollFrame = 0;
 let dragAutoScrollSpeed = 0;
 let encryptionKeyIdentity = "";
 let encryptionKeyPromise = null;
+let encryptionKeyV2Identity = "";
+let encryptionKeyV2Promise = null;
 localStorage.removeItem("todo-identity");
 
 const state = {
@@ -148,6 +153,8 @@ async function restoreLocalSnapshot() {
     markQueuedTasksUnsynced();
     encryptionKeyIdentity = "";
     encryptionKeyPromise = null;
+    encryptionKeyV2Identity = "";
+    encryptionKeyV2Promise = null;
     render();
     return true;
   } catch {
@@ -269,7 +276,10 @@ function dateInShanghai(value = new Date()) {
 }
 const today = () => dateInShanghai();
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
-const isEncryptedText = (value) => String(value || "").startsWith(ENCRYPTION_PREFIX);
+const isEncryptedText = (value) => {
+  const text = String(value || "");
+  return text.startsWith(ENCRYPTION_PREFIX) || text.startsWith(ENCRYPTION_PREFIX_V2);
+};
 
 function bytesToBase64(bytes) {
   let binary = "";
@@ -282,6 +292,10 @@ function bytesToBase64(bytes) {
 function base64ToBytes(value) {
   const binary = atob(value);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function identitySeedBytes(seed = state.encryptionSeed) {
+  return urlBase64ToUint8Array(String(seed || "").replace(/^u_/, ""));
 }
 
 function encryptionKeyFor(seed = state.encryptionSeed) {
@@ -305,29 +319,51 @@ function encryptionKeyFor(seed = state.encryptionSeed) {
   return encryptionKeyPromise;
 }
 
+function encryptionKeyForV2(seed = state.encryptionSeed) {
+  if (!seed || !window.crypto?.subtle) {
+    throw new Error("当前浏览器无法启用任务内容加密");
+  }
+  if (encryptionKeyV2Identity === seed && encryptionKeyV2Promise) return encryptionKeyV2Promise;
+  encryptionKeyV2Identity = seed;
+  encryptionKeyV2Promise = crypto.subtle.importKey(
+    "raw",
+    identitySeedBytes(seed),
+    "HKDF",
+    false,
+    ["deriveKey"],
+  ).then((keyMaterial) => crypto.subtle.deriveKey({
+    name: "HKDF",
+    hash: "SHA-256",
+    salt: new TextEncoder().encode(ENCRYPTION_SALT_V2),
+    info: new TextEncoder().encode(ENCRYPTION_INFO_V2),
+  }, keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]));
+  return encryptionKeyV2Promise;
+}
+
 async function encryptText(value, identity = state.encryptionSeed) {
   const plaintext = String(value || "");
   if (!plaintext || isEncryptedText(plaintext)) return plaintext;
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = new Uint8Array(await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
-    await encryptionKeyFor(identity),
+    await encryptionKeyForV2(identity),
     new TextEncoder().encode(plaintext),
   ));
   const packed = new Uint8Array(iv.length + encrypted.length);
   packed.set(iv);
   packed.set(encrypted, iv.length);
-  return `${ENCRYPTION_PREFIX}${bytesToBase64(packed)}`;
+  return `${ENCRYPTION_PREFIX_V2}${bytesToBase64(packed)}`;
 }
 
 async function decryptText(value, identity = state.encryptionSeed) {
   const stored = String(value || "");
   if (!isEncryptedText(stored)) return stored;
   try {
-    const packed = base64ToBytes(stored.slice(ENCRYPTION_PREFIX.length));
+    const prefix = stored.startsWith(ENCRYPTION_PREFIX_V2) ? ENCRYPTION_PREFIX_V2 : ENCRYPTION_PREFIX;
+    const packed = base64ToBytes(stored.slice(prefix.length));
     const decrypted = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: packed.slice(0, 12) },
-      await encryptionKeyFor(identity),
+      await (prefix === ENCRYPTION_PREFIX_V2 ? encryptionKeyForV2(identity) : encryptionKeyFor(identity)),
       packed.slice(12),
     );
     return new TextDecoder().decode(decrypted);
@@ -345,12 +381,15 @@ async function encryptTaskContent(task, identity = state.encryptionSeed) {
 }
 
 async function decryptTaskContent(task, identity = state.encryptionSeed) {
-  const contentEncrypted = isEncryptedText(task.title) && (!task.details || isEncryptedText(task.details));
+  const encryptedTitle = String(task.title || "");
+  const encryptedDetails = String(task.details || "");
+  const contentEncrypted = isEncryptedText(encryptedTitle) && (!encryptedDetails || isEncryptedText(encryptedDetails));
+  const contentV1 = encryptedTitle.startsWith(ENCRYPTION_PREFIX) || encryptedDetails.startsWith(ENCRYPTION_PREFIX);
   const [title, details] = await Promise.all([
     decryptText(task.title, identity),
     decryptText(task.details || "", identity),
   ]);
-  return { ...task, title, details, _contentEncrypted: contentEncrypted };
+  return { ...task, title, details, _contentEncrypted: contentEncrypted, _contentV1: contentV1 };
 }
 
 async function decryptApiPayload(payload) {
@@ -670,6 +709,8 @@ async function enterAccount(account) {
   state.encryptionSeed = seed;
   encryptionKeyIdentity = "";
   encryptionKeyPromise = null;
+  encryptionKeyV2Identity = "";
+  encryptionKeyV2Promise = null;
   state.authPromptOpen = false;
   state.authSubmitting = false;
   state.authDirty = false;
@@ -1134,6 +1175,24 @@ function migrateLegacyTaskContent(tasks) {
   });
 }
 
+// rtenc:v1 → rtenc:v2 后台迁移；与明文加密同样走 saveInBackground（best-effort，不进 outbox）。
+function migrateV1TaskContent(tasks) {
+  if (!tasks.length) return;
+  tasks.forEach((task) => { task._contentV1 = false; });
+  saveInBackground(async () => {
+    const encryptedTasks = await Promise.all(tasks.map(async (task) => {
+      const encrypted = await encryptTaskContent(task);
+      return { id: resolvedTaskId(task.id), title: encrypted.title, details: encrypted.details };
+    }));
+    for (let offset = 0; offset < encryptedTasks.length; offset += 50) {
+      await api("/api/tasks/encrypt", {
+        method: "POST",
+        body: JSON.stringify({ tasks: encryptedTasks.slice(offset, offset + 50) }),
+      });
+    }
+  });
+}
+
 async function loadTasks({ quiet = false } = {}) {
   if (!state.identity) return render();
   if (taskSyncPromise) return taskSyncPromise;
@@ -1141,6 +1200,7 @@ async function loadTasks({ quiet = false } = {}) {
     try {
       state.tasks = mergeRemoteTasks((await api("/api/tasks")).tasks);
       migrateLegacyTaskContent(state.tasks.filter((task) => task.id > 0 && !task._contentEncrypted));
+      migrateV1TaskContent(state.tasks.filter((task) => task.id > 0 && task._contentV1));
       lastTaskSyncAt = Date.now();
       await persistLocalSnapshot();
     } catch (error) {
@@ -1686,7 +1746,7 @@ app.addEventListener("click", async (event) => {
       state.authUsername = state.username;
       await localClear().catch(() => {});
       localProfile = null; taskIdAliases.clear(); nextTemporaryTaskId = -1;
-      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; state.pushStatus = null; state.dueReminders = []; encryptionKeyIdentity = ""; encryptionKeyPromise = null; return render();
+      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; state.pushStatus = null; state.dueReminders = []; encryptionKeyIdentity = ""; encryptionKeyPromise = null; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null; return render();
     }
     if (action === "enable-notifications") { await requestNotificationPermission(); await refreshPushStatus(); return render(); }
     if (action === "send-test-push") {
@@ -1916,7 +1976,7 @@ async function restoreSession() {
     const response = await api("/api/auth/session");
     if (!response.account || response.account.username !== rememberedUsername) throw new Error("会话不匹配");
     state.identity = "authenticated"; state.username = response.account.username; state.encryptionSeed = response.account.encryptionSeed || state.encryptionSeed; state.authPromptOpen = false;
-    encryptionKeyIdentity = ""; encryptionKeyPromise = null;
+    encryptionKeyIdentity = ""; encryptionKeyPromise = null; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null;
     lastSessionLeaseAt = Date.now();
     await persistLocalSnapshot();
     if (serviceWorkerRegistration) await synchronizeForeground(); else await flushOutboxAndLoad();
