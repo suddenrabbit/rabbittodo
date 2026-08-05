@@ -87,18 +87,20 @@ async function hkdf(salt, ikm, info, length) {
 }
 
 async function webPushEncrypt(subscription, payload) {
-  const clientPublicKey = await crypto.subtle.importKey("raw", b64urlDecode(subscription.p256dh), { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const clientPublicKey = b64urlDecode(subscription.p256dh);
   const ephemeral = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
-  const sharedSecret = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: clientPublicKey }, ephemeral.privateKey, 256));
+  const importedClientKey = await crypto.subtle.importKey("raw", clientPublicKey, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const sharedSecret = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: importedClientKey }, ephemeral.privateKey, 256));
   const authSecret = b64urlDecode(subscription.auth);
-  const ikm = await hkdf(authSecret, sharedSecret, "Content-Encoding: auth\0", 32);
   const ephemeralPub = new Uint8Array(await crypto.subtle.exportKey("raw", ephemeral.publicKey));
+  // RFC 8291 Web Push：IKM = HKDF(auth_secret, ecdh_secret, "WebPush: info\0" || ua_pub || as_pub)
+  const ikm = await hkdf(authSecret, sharedSecret, concatBytes(encoder.encode("WebPush: info\0"), clientPublicKey, ephemeralPub), 32);
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await hkdf(salt, ikm, concatBytes(encoder.encode("Content-Encoding: aes128gcm\0"), ephemeralPub), 16);
-  const nonce = await hkdf(salt, ikm, concatBytes(encoder.encode("Content-Encoding: nonce\0"), ephemeralPub), 12);
+  // RFC 8188 aes128gcm：key/nonce 的 info 只含编码名，不再拼接 ephemeral 公钥
+  const key = await hkdf(salt, ikm, "Content-Encoding: aes128gcm\0", 16);
+  const nonce = await hkdf(salt, ikm, "Content-Encoding: nonce\0", 12);
   const plaintext = concatBytes(encoder.encode(payload), new Uint8Array([2]));
-  // Apple Web Push 限制整个 aes128gcm 请求体（含 86 字节头部与 16 字节 GCM tag）不超过 4096 字节；
-  // 固定 4096 的 record size 会撑出 4198 字节导致 413 PayloadTooLarge，须按明文实际大小取最小合法记录长度。
+  // 与 web-push/http_ece 一致：record 只装数据与 0x02 分隔符，不做 4096 整块填充，请求体远小于 Apple 约 4KB 上限。
   const recordSize = Math.min(3994, Math.max(18, plaintext.length));
   const padded = concatBytes(plaintext, new Uint8Array(recordSize - plaintext.length));
   const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
