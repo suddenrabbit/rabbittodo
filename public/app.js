@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260804.215504";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v73";
+const APP_VERSION = "v20260805.193857";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v76";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -585,9 +585,18 @@ function notificationStatusText() {
   if (permission === "denied") return { label: "通知已被禁用", level: "denied", button: "通知已禁用，如何开启？" };
   if (permission !== "granted") return { label: "通知未开启", level: "off", button: "开启通知" };
   if (server && server.vapidConfigured === false) return { label: "服务端未配置推送密钥", level: "error", button: "" };
-  if (server && server.subscribed) return { label: "通知已开启", level: "on", button: "" };
+  if (server && server.subscribed) return { label: "通知已开启", level: "on", button: "", test: true, deviceCount: server.endpoints || 1 };
   if (!server) return { label: "通知已开启", level: "on", button: "" };
   return { label: "通知已开启，但订阅未注册", level: "error", button: "重新开启推送" };
+}
+
+// 从 User-Agent 提取简明的设备描述（用于“我的”页设备浮窗）。
+function deviceLabel(userAgent) {
+  const ua = String(userAgent || "");
+  const browser = ua.includes("Edg/") ? "Edge" : ua.includes("Firefox/") ? "Firefox" : ua.includes("Chrome/") ? "Chrome" : ua.includes("Safari/") ? "Safari" : "浏览器";
+  const os = ua.includes("iPhone") ? "iPhone" : ua.includes("iPad") ? "iPad" : ua.includes("Mac OS X") ? "macOS" : ua.includes("Android") ? "Android" : ua.includes("Windows") ? "Windows" : "";
+  const headless = ua.includes("Headless") ? "（无头）" : "";
+  return `${browser} · ${os}${headless}`;
 }
 
 // weekly/monthly 是否应在今天触发：按上海时区比较星期/日期。
@@ -1334,8 +1343,12 @@ function pageHeader(heading) {
 function profilePage() {
   const passwordForm = state.passwordDialog ? '<form id="change-password-form" class="account-form"><input id="current-password" type="password" placeholder="当前密码" required /><input id="new-password" type="password" placeholder="新密码（至少 8 位）" required /><input id="new-password-confirm" type="password" placeholder="再次输入新密码" required /><button class="save-button" type="submit">更新密码</button></form>' : "";
   const notif = notificationStatusText();
-  const notifBtn = !("Notification" in window) || !notif.button ? "" : `<button type="button" class="save-button notification-toggle" data-action="enable-notifications">${notif.button}</button>`;
-  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span>${passwordForm}<p class="notification-status">🔔 ${notif.label}</p>${notifBtn}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
+  const notifBtn = !("Notification" in window) || !notif.button ? "" : `<button type="button" class="save-button notification-toggle" data-action="${notif.test ? "send-test-push" : "enable-notifications"}">${notif.button}</button>`;
+  const notifLink = notif.test ? `<a href="#" class="notification-test-link" data-action="send-test-push">发送测试通知</a>` : "";
+  const devices = state.pushStatus?.devices || [];
+  const deviceLink = notif.test ? `<a href="#" class="notification-devices" data-action="toggle-devices">${notif.deviceCount} 台设备</a>` : "";
+  const devicePanel = state.pushDevicesOpen && devices.length ? `<div class="device-popover">${devices.map((device) => `<div class="device-item"><span class="device-name">${escapeHtml(deviceLabel(device.userAgent))}</span><span class="device-meta">注册于 ${escapeHtml(String(device.createdAt || "").slice(0, 10))}</span><button type="button" data-action="remove-device" data-endpoint="${escapeHtml(device.endpoint)}">移除</button></div>`).join("")}</div>` : "";
+  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span>${passwordForm}<p class="notification-status">🔔 ${notif.label}（${deviceLink}）${notifLink}</p>${devicePanel}${notifBtn}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
 }
 
 function taskScrollContainer() {
@@ -1676,6 +1689,23 @@ app.addEventListener("click", async (event) => {
       state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; state.pushStatus = null; state.dueReminders = []; encryptionKeyIdentity = ""; encryptionKeyPromise = null; return render();
     }
     if (action === "enable-notifications") { await requestNotificationPermission(); await refreshPushStatus(); return render(); }
+    if (action === "send-test-push") {
+      try {
+        const result = await api("/api/push/test", { method: "POST", body: "{}", decrypt: false, timeoutMs: 20000 });
+        console.log("推送测试详情:", result.details);
+        alert(`已向 ${result.endpoints} 台设备发送测试通知：成功 ${result.sent}，失败 ${result.failed}（详见控制台）`);
+      } catch (error) { alert(`测试推送失败：${error.message}`); }
+      await refreshPushStatus();
+      return render();
+    }
+    if (action === "toggle-devices") { state.pushDevicesOpen = !state.pushDevicesOpen; return render(); }
+    if (action === "remove-device") {
+      const endpoint = String(button.dataset.endpoint || "");
+      if (!endpoint) return;
+      try { await api("/api/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint }), decrypt: false, timeoutMs: 5000 }); } catch {}
+      await refreshPushStatus();
+      return render();
+    }
     if (action === "dismiss-reminder") {
       const key = String(button.dataset.key || "");
       if (key) localStorage.setItem(`rabbittodo-reminder-dismissed-${key}`, "1");
@@ -1751,6 +1781,14 @@ app.addEventListener("click", async (event) => {
   }
   const card = event.target.closest("[data-task-id]");
   if (card) openEditor(state.tasks.find((task) => task.id === Number(card.dataset.taskId)));
+});
+
+// 点击设备浮窗以外区域时收起浮窗。
+document.addEventListener("click", (event) => {
+  if (state.pushDevicesOpen && !event.target.closest(".device-popover, .notification-devices")) {
+    state.pushDevicesOpen = false;
+    render();
+  }
 });
 
 app.addEventListener("keydown", (event) => {

@@ -63,7 +63,6 @@ async function adminAuthorized(request, env) { const supplied = String(request.h
 
 // --- 提醒与 Web Push ---
 const REMINDER_FREQUENCIES = new Set(["none", "daily", "weekly", "monthly"]);
-const PUSH_RECORD_SIZE = 4096;
 const SUPPORTED_TIME_ZONES = new Set(["Asia/Shanghai"]);
 
 function b64urlEncode(bytes) { return b64(bytes).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }
@@ -98,12 +97,15 @@ async function webPushEncrypt(subscription, payload) {
   const key = await hkdf(salt, ikm, concatBytes(encoder.encode("Content-Encoding: aes128gcm\0"), ephemeralPub), 16);
   const nonce = await hkdf(salt, ikm, concatBytes(encoder.encode("Content-Encoding: nonce\0"), ephemeralPub), 12);
   const plaintext = concatBytes(encoder.encode(payload), new Uint8Array([2]));
-  const padded = concatBytes(plaintext, new Uint8Array(PUSH_RECORD_SIZE - plaintext.length));
+  // Apple Web Push 限制整个 aes128gcm 请求体（含 86 字节头部与 16 字节 GCM tag）不超过 4096 字节；
+  // 固定 4096 的 record size 会撑出 4198 字节导致 413 PayloadTooLarge，须按明文实际大小取最小合法记录长度。
+  const recordSize = Math.min(3994, Math.max(18, plaintext.length));
+  const padded = concatBytes(plaintext, new Uint8Array(recordSize - plaintext.length));
   const cryptoKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, cryptoKey, padded));
   const header = new Uint8Array(16 + 4 + 1 + ephemeralPub.length);
   header.set(salt, 0);
-  new DataView(header.buffer).setUint32(16, PUSH_RECORD_SIZE);
+  new DataView(header.buffer).setUint32(16, recordSize);
   header[20] = ephemeralPub.length;
   header.set(ephemeralPub, 21);
   return concatBytes(header, ciphertext);
@@ -119,17 +121,24 @@ async function vapidAuthorization(endpoint, env) {
   return `vapid t=${signingInput}.${signature}, k=${env.VAPID_PUBLIC_KEY}`;
 }
 
-async function sendWebPush(subscription, payload, env) {
+async function sendWebPush(subscription, payload, env, timeoutMs) {
   if (!env?.VAPID_PRIVATE_KEY || !env?.VAPID_PUBLIC_KEY) return "unconfigured";
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
     const body = await webPushEncrypt(subscription, payload);
     const authorization = await vapidAuthorization(subscription.endpoint, env);
-    const response = await fetch(subscription.endpoint, { method: "POST", headers: { Authorization: authorization, "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", Ttl: "86400" }, body });
+    const response = await fetch(subscription.endpoint, { method: "POST", headers: { Authorization: authorization, "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", Ttl: "86400" }, body, signal: controller?.signal });
     if (response.ok || response.status === 201 || response.status === 202) return "sent";
     // 推送服务对无效/过期订阅返回 404/410，可安全清理。
     if (response.status === 404 || response.status === 410) return "gone";
+    console.warn("sendWebPush failed:", response.status, response.statusText);
     return "failed";
-  } catch (error) { console.error("sendWebPush error", error); return "failed"; }
+  } catch (error) {
+    if (controller?.signal.aborted) console.warn("sendWebPush timeout:", subscription.endpoint.slice(0, 60));
+    else console.error("sendWebPush error", error);
+    return "failed";
+  } finally { if (timer) clearTimeout(timer); }
 }
 
 function sanitizeReminder(input) {
@@ -429,8 +438,8 @@ async function pushApi(request, env, url, account) {
     return json({ publicKey: env.VAPID_PUBLIC_KEY || "" });
   }
   if (request.method === "GET" && pathname === "/api/push/status") {
-    const { results } = await db.prepare("SELECT endpoint FROM push_subscriptions WHERE identity_code = ?").bind(identity).all();
-    return json({ vapidConfigured: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY), subscribed: results.length > 0, endpoints: results.length });
+    const { results } = await db.prepare("SELECT endpoint, user_agent, created_at FROM push_subscriptions WHERE identity_code = ? ORDER BY created_at DESC").bind(identity).all();
+    return json({ vapidConfigured: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY), subscribed: results.length > 0, endpoints: results.length, devices: results.map((row) => ({ endpoint: row.endpoint, userAgent: row.user_agent || "", createdAt: row.created_at })) });
   }
   if (request.method === "POST" && pathname === "/api/push/subscribe") {
     const { endpoint, p256dh, auth, userAgent } = await bodyFrom(request);
@@ -445,6 +454,24 @@ async function pushApi(request, env, url, account) {
     if (!endpoint) return json({ error: "缺少推送订阅地址" }, 400);
     await db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ? AND identity_code = ?").bind(endpoint, identity).run();
     return json({ ok: true });
+  }
+  if (request.method === "POST" && pathname === "/api/push/test") {
+    // 手动推送测试：向当前账号全部已注册设备立即发送一条测试通知，用于验证订阅、密钥与推送链路。
+    const { results: subs } = await db.prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE identity_code = ?").bind(identity).all();
+    if (!subs.length) return json({ error: "当前账号没有已注册的推送设备" }, 400);
+    let sent = 0;
+    let failed = 0;
+    const details = [];
+    for (const sub of subs) {
+      const outcome = await sendWebPush(sub, JSON.stringify({ title: "RabbitToDo", body: "这是一条测试推送" }), env, 10000);
+      details.push({ userAgent: sub.user_agent || "unknown", outcome });
+      if (outcome === "sent") sent += 1;
+      else {
+        failed += 1;
+        if (outcome === "gone") await db.prepare("DELETE FROM push_subscriptions WHERE identity_code = ? AND endpoint = ?").bind(identity, sub.endpoint).run();
+      }
+    }
+    return json({ ok: true, sent, failed, endpoints: subs.length, details });
   }
   return json({ error: "未找到接口" }, 404);
 }
