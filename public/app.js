@@ -1,7 +1,7 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260805.233043";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v80";
+const APP_VERSION = "v20260807.005345";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v81";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -35,6 +35,7 @@ const updateViewportClasses = () => {
 let isReloadingForServiceWorker = false;
 let serviceWorkerRegistration = null;
 let serviceWorkerUpdatePromise = null;
+let serviceWorkerUpdateRetryTimer = 0;
 let serviceWorkerVersionProbeScheduled = false;
 let foregroundSyncPromise = null;
 let lastSessionLeaseAt = 0;
@@ -73,7 +74,7 @@ const state = {
   identity: "", username: "", encryptionSeed: "", authMode: "login", authPromptOpen: true, authSubmitting: false, authDirty: false,
   authError: "", authUsername: "", authPassword: "", authConfirm: "", authResetCode: "", identityDraft: "",
   passwordDialog: false, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, reminderPicker: null, pushStatus: null, dueReminders: [], draftTags: [], tagInput: "",
-  updateReady: false, updateApplying: false,
+  updateApplying: false,
   syncStatus: "idle", syncError: "", syncCount: 0,
 };
 
@@ -168,10 +169,7 @@ function serviceWorkerVersionNumber(value) {
 
 function handleServiceWorkerVersion(version) {
   if (serviceWorkerVersionNumber(version) < serviceWorkerVersionNumber(EXPECTED_SERVICE_WORKER_VERSION)) return;
-  if (serviceWorkerRegistration?.waiting) {
-    state.updateReady = true;
-    render();
-  }
+  if (serviceWorkerRegistration?.waiting) applyServiceWorkerUpdate();
 }
 
 function probeServiceWorkerVersion() {
@@ -193,10 +191,7 @@ function watchServiceWorkerInstallation(registration) {
     const installingWorker = registration.installing;
     installingWorker?.addEventListener("statechange", () => {
       if (installingWorker.state === "redundant") scheduleServiceWorkerRetry();
-      if (installingWorker.state === "installed" && navigator.serviceWorker.controller) {
-        state.updateReady = true;
-        render();
-      }
+      if (installingWorker.state === "installed" && navigator.serviceWorker.controller) applyServiceWorkerUpdate();
     });
   });
 }
@@ -213,10 +208,7 @@ function checkForServiceWorkerUpdate({ force = false } = {}) {
   sessionStorage.setItem(SERVICE_WORKER_CHECK_KEY, String(now));
   serviceWorkerUpdatePromise = serviceWorkerRegistration.update()
     .then((registration) => {
-      if (registration.waiting) {
-        state.updateReady = true;
-        render();
-      }
+      if (registration.waiting) applyServiceWorkerUpdate();
       probeServiceWorkerVersion();
     })
     .catch(() => scheduleServiceWorkerRetry())
@@ -225,7 +217,17 @@ function checkForServiceWorkerUpdate({ force = false } = {}) {
 }
 
 async function applyServiceWorkerUpdate() {
-  if (!state.updateReady || state.updateApplying || !serviceWorkerRegistration?.waiting) return;
+  if (state.updateApplying || !serviceWorkerRegistration?.waiting) return;
+  // 自动更新：编辑、拖拽、登录弹窗或进行中的同步未结束时推迟到安全时机，避免刷新打断。
+  if (state.editor || pointerDrag || state.authPromptOpen || pendingMutations) {
+    if (!serviceWorkerUpdateRetryTimer) {
+      serviceWorkerUpdateRetryTimer = setTimeout(() => {
+        serviceWorkerUpdateRetryTimer = 0;
+        applyServiceWorkerUpdate();
+      }, 15_000);
+    }
+    return;
+  }
   state.updateApplying = true;
   render();
   try { await persistLocalSnapshot(); } catch {}
@@ -1406,12 +1408,6 @@ function identityGate() {
   return `<div class="identity-gate"><section class="identity-card ${submitting ? "is-submitting" : ""}" id="auth-panel"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>${title}</h2><span>${hint}</span>${fields}${errorMessage}<button class="save-button identity-submit-button" type="button" data-action="submit-auth" ${submitting ? "disabled" : ""}>${submitting ? "处理中…" : submitLabel}</button><div class="auth-links">${mode !== "login" ? '<button type="button" data-action="auth-login">返回登录</button>' : '<button type="button" data-action="auth-register">创建新账号</button>'}${mode === "login" ? '<button type="button" data-action="auth-reset">使用重置码</button>' : ""}</div></section></div>`;
 }
 
-function updatePrompt() {
-  if (!state.updateReady && !state.updateApplying) return "";
-  const applying = state.updateApplying;
-  return `<div class="update-gate"><section class="update-card"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><h2>检测到新版本</h2><span>更新后将使用最新功能。当前离线修改已安全保存在本机。</span><button class="save-button" type="button" data-action="apply-update" ${applying ? "disabled" : ""}>${applying ? "更新中…" : "立即更新"}</button></section></div>`;
-}
-
 function pageHeader(heading) {
   return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>Hi, ${escapeHtml(state.username || "我的")}</span></button></header>`;
 }
@@ -1478,7 +1474,7 @@ function render() {
     ? profilePage()
     : `<section class="workspace workspace-${state.view}" data-view="${state.view}" data-tag="${escapeHtml(state.tag)}" data-color="${escapeHtml(state.color)}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${syncNotice()}${dueReminderBanner()}${taskContent}<p class="task-encryption-note"><i>🔒</i>待办事项内容均已加密存储</p></main></section>`;
   app.innerHTML = `<section class="phone"><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
-    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${reminderPicker()}${identityGate()}${updatePrompt()}`;
+    ${state.view !== "profile" ? '<button class="add-button" data-action="add" aria-label="添加事项">+</button>' : ""}<nav class="tabbar tabbar-two"><button data-action="view" data-view="todo" class="${state.view === "todo" ? "active" : ""}"><span>☐</span>待办</button><button data-action="view" data-view="done" class="${state.view === "done" ? "active" : ""}"><span>✓</span>已办</button></nav></section>${editor()}${datePicker()}${reminderPicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
     persistentAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
@@ -1735,7 +1731,6 @@ app.addEventListener("click", async (event) => {
   if (button) {
     const action = button.dataset.action;
     if (action === "submit-auth") return submitAuthentication();
-    if (action === "apply-update") return applyServiceWorkerUpdate();
     if (action === "sync-now") {
       setSyncStatus("syncing");
       render();
