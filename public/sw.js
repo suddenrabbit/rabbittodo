@@ -1,5 +1,5 @@
-const CACHE = "rabbittodo-v81";
-const ASSETS = ["/", "/index.html", "/style.css", "/style-overrides.css", "/app.js", "/manifest.webmanifest", "/rabbittodo-icon.png", "/rabbittodo-icon-dock-v4.png"];
+const CACHE = "rabbittodo-v86";
+const ASSETS = ["/", "/index.html", "/style.css", "/style-overrides.css", "/app.js", "/manifest.webmanifest", "/rabbittodo-icon.png", "/rabbittodo-icon-dock-v4.png", "/rabbittodo-avatar.png"];
 
 async function cacheLatestAssets() {
   const cache = await caches.open(CACHE);
