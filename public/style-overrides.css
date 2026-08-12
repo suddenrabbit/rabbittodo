@@ -130,33 +130,33 @@
 }
 
 .task-card {
-  border-width: 1.5px;
+  border-width: 1px;
   transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
 }
 
 .task-card.color-violet {
   border-color: #c8c0ff;
-  box-shadow: 0 7px 19px #786ae126, 0 2px 5px #786ae11a;
+  box-shadow: 0 4px 12px #786ae117, 0 1px 3px #786ae10d;
 }
 
 .task-card.color-mint {
   border-color: #ade5d7;
-  box-shadow: 0 7px 19px #5ac9ae28, 0 2px 5px #5ac9ae16;
+  box-shadow: 0 4px 12px #5ac9ae17, 0 1px 3px #5ac9ae0d;
 }
 
 .task-card.color-orange {
   border-color: #f5ce9f;
-  box-shadow: 0 7px 19px #eba94e2b, 0 2px 5px #eba94e18;
+  box-shadow: 0 4px 12px #eba94e18, 0 1px 3px #eba94e0e;
 }
 
 .task-card.color-blue {
   border-color: #b9daf1;
-  box-shadow: 0 7px 19px #6aa9dc2b, 0 2px 5px #6aa9dc18;
+  box-shadow: 0 4px 12px #6aa9dc18, 0 1px 3px #6aa9dc0e;
 }
 
 .task-card.color-rose {
   border-color: #efbdd1;
-  box-shadow: 0 7px 19px #db78a62b, 0 2px 5px #db78a618;
+  box-shadow: 0 4px 12px #db78a618, 0 1px 3px #db78a60e;
 }
 
 
@@ -187,6 +187,10 @@
 .task-card.color-orange .task-color-dot.is-star { background: transparent; color: #eeac60; }
 .task-card.color-blue .task-color-dot.is-star { background: transparent; color: #76aad8; }
 .task-card.color-rose .task-color-dot.is-star { background: transparent; color: #df80a8; }
+
+.task-card .task-color-dot:not(.is-star) {
+  display: none;
+}
 
 .task-details {
   display: block;
@@ -1197,3 +1201,146 @@ body.is-task-dragging {
 .due-reminder-bar { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; margin: 0 0 12px; background: #eef3ff; border: 1px solid #cdd9f5; border-radius: 14px; }
 .due-reminder-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; font-weight: 700; color: #3c3a43; }
 .due-reminder-item button { flex-shrink: 0; padding: 4px 10px; border: 0; border-radius: 8px; background: #6758d7; color: #fff; font-size: 12px; font-weight: 700; }
+
+/* 账号主题：任务自身颜色和错误/逾期等语义色继续使用各自固定色。 */
+:root {
+  --accent: #6758d7;
+  --accent-strong: #5848c2;
+  --accent-soft: #eeebff;
+  --accent-border: #cfc9ff;
+  --accent-shadow: #6556d142;
+  --accent-gradient-start: #6758d7;
+  --accent-gradient-end: #4f42ac;
+  --avatar-gradient-start: #b7abff;
+  --avatar-gradient-end: #6558e8;
+}
+:root[data-theme="mint"] {
+  --accent: #4cb99f;
+  --accent-strong: #257c68;
+  --accent-soft: #e4f7f1;
+  --accent-border: #a9dfd2;
+  --accent-shadow: #329a8140;
+  --accent-gradient-start: #2e7f6c;
+  --accent-gradient-end: #246b5b;
+  --avatar-gradient-start: #c1f2e3;
+  --avatar-gradient-end: #55c4a8;
+}
+:root[data-theme="orange"] {
+  --accent: #e99a45;
+  --accent-strong: #a95e16;
+  --accent-soft: #fff1df;
+  --accent-border: #f1c58e;
+  --accent-shadow: #d77b2740;
+  --accent-gradient-start: #a95e16;
+  --accent-gradient-end: #85430b;
+  --avatar-gradient-start: #ffe2b8;
+  --avatar-gradient-end: #f1a45a;
+}
+:root[data-theme="blue"] {
+  --accent: #65a2d3;
+  --accent-strong: #3578ae;
+  --accent-soft: #e8f3fb;
+  --accent-border: #b7d7ed;
+  --accent-shadow: #458bc040;
+  --accent-gradient-start: #3578ae;
+  --accent-gradient-end: #285d86;
+  --avatar-gradient-start: #c4e3f8;
+  --avatar-gradient-end: #6eaddb;
+}
+:root[data-theme="rose"] {
+  --accent: #d96f9d;
+  --accent-strong: #ad4775;
+  --accent-soft: #fceaf2;
+  --accent-border: #edb7cf;
+  --accent-shadow: #c6538740;
+  --accent-gradient-start: #ad4775;
+  --accent-gradient-end: #843454;
+  --avatar-gradient-start: #f7ccde;
+  --avatar-gradient-end: #da7da9;
+}
+
+.brand-inline,
+.tabbar .active,
+.all-summary strong,
+.composer-head button,
+.composer-row > input,
+.tag-input-wrap input,
+.date-picker-head button,
+.calendar-nav button,
+.reminder-time-inputs > span,
+.reminder-freq,
+.profile-actions button,
+.notification-test-link,
+.notification-devices { color: var(--accent-strong); }
+
+.profile-card .profile-actions button { background: var(--accent-soft); }
+.add-button,
+.save-button,
+.calendar-day.is-selected,
+.reminder-freq.selected,
+.due-reminder-item button { background: var(--accent-strong); }
+.profile-card .save-button { background: var(--accent-strong); color: #fff; }
+
+.add-button { box-shadow: 0 8px 20px var(--accent-shadow); }
+.progress-card { background: linear-gradient(136deg, var(--accent-gradient-start), var(--accent-gradient-end)); box-shadow: 0 12px 24px var(--accent-shadow); }
+.progress-ring::before { background: var(--accent-strong); }
+.filters .filter-active,
+.color-filters .filter-active,
+.draft-tag,
+.status-option.selected,
+.pin-toggle.is-active,
+.set-date-button,
+.calendar-shortcuts button { background: var(--accent-soft); color: var(--accent-strong); }
+.calendar-day.is-today { color: var(--accent-strong); box-shadow: inset 0 0 0 1px var(--accent-border); }
+.calendar-day.is-selected,
+.reminder-freq.selected { color: #fff; box-shadow: 0 4px 10px var(--accent-shadow); }
+.task-meta .tag { background: var(--accent-soft); color: var(--accent-strong); }
+.task-zone-title i,
+.is-empty-pinned-zone:has(.pinned-task-list.is-drop-target) .temporary-pin-divider { color: var(--accent-strong); }
+.is-empty-pinned-zone:has(.pinned-task-list.is-drop-target) .temporary-pin-divider::before,
+.is-empty-pinned-zone:has(.pinned-task-list.is-drop-target) .temporary-pin-divider::after { background: var(--accent); box-shadow: 0 0 0 1px var(--accent-shadow); }
+.task-drag-ghost { box-shadow: 0 18px 38px #36304e3d, 0 6px 16px var(--accent-shadow) !important; }
+.tabbar button:focus-visible { outline-color: var(--accent-border); }
+.identity-card input:focus,
+.account-form input:focus,
+.composer input:focus,
+.composer textarea:focus,
+.reminder-hour:focus,
+.reminder-minute:focus { outline-color: var(--accent); }
+
+.avatar-icon,
+.profile-icon {
+  background:
+    radial-gradient(circle at 24% 18%, #ffffff8f 0, #ffffff00 48%),
+    linear-gradient(136deg, var(--avatar-gradient-start), var(--avatar-gradient-end));
+  box-shadow: 0 3px 9px var(--accent-shadow);
+}
+.avatar-icon img,
+.profile-icon img { object-fit: contain; }
+
+.theme-settings { margin-top: 24px; padding-top: 20px; border-top: 1px solid #efedf3; }
+.theme-settings h2 { margin: 0 0 13px; color: #55535d; font-size: 13px; }
+.theme-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+.profile-card .theme-option {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 5px 1px;
+  border-radius: 11px;
+  background: transparent;
+  color: #85838e;
+}
+.theme-option i { width: 25px; height: 25px; border: 3px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px #dedce5; }
+.theme-option span { display: block; width: 100%; overflow: hidden; color: inherit; font-size: 9px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.theme-option.theme-violet i { background: linear-gradient(136deg, #6758d7, #4f42ac); }
+.theme-option.theme-mint i { background: linear-gradient(136deg, #2e7f6c, #246b5b); }
+.theme-option.theme-orange i { background: linear-gradient(136deg, #a95e16, #85430b); }
+.theme-option.theme-blue i { background: linear-gradient(136deg, #3578ae, #285d86); }
+.theme-option.theme-rose i { background: linear-gradient(136deg, #ad4775, #843454); }
+.profile-card .theme-option.is-selected { background: var(--accent-soft); color: var(--accent-strong); font-weight: 750; }
+.theme-option.is-selected i { box-shadow: 0 0 0 2px var(--accent-strong); }
+.theme-option:disabled { cursor: wait; opacity: .72; }
+.profile-card .theme-status { min-height: 16px; margin: 9px 0 0; color: #9a98a3; font-size: 10px; }
+.profile-card .theme-status.is-error { color: #b54752; }

@@ -58,6 +58,8 @@ RabbitToDo 是一个面向个人使用的轻量待办 PWA，围绕"快速记录�
 - 管理后台位于 `/console/`，支持查看、启用、禁用账号，以及生成一次性密码重置码。
 - 一次性重置码有效期为 15 分钟；重置密码会撤销旧会话，但不会改变内部身份码或任务密文。
 - 历史 `pending` 账号在 migration 中自动转为 `enabled`，已有 `disabled` 状态保持不变。
+- 登录后的页面支持五种账号主题色（葡萄紫、薄荷绿、日落橙、海盐蓝、莓果粉），选择结果保存在账号中并跨设备同步；兔子头像背景、品牌名、主要操作和选中态会随主题变化。
+- 新建任务默认使用当前账号主题色；编辑既有任务或切换主题不会改变历史任务颜色，任务卡片颜色和错误、逾期等语义状态色保持独立。
 
 ### 内容加密
 
@@ -165,7 +167,7 @@ Cloudflare Git 集成可关联 GitHub `main` 分支自动部署。正式环境�
 pnpm run db:migrate:remote
 ```
 
-2.0 账户体系对应的 `migrations/0006_user_accounts.sql` 已进入生产基线。2.1 的 `migrations/0007_offline_task_mutations.sql` 已进入当前生产 schema；它只给既有任务表增加可空的客户端离线创建编号及唯一索引，用于安全重试，不删除、不重建也不修改既有任务内容。2.3 的 `migrations/0008_reminders.sql` 新增 `task_reminders` 与 `push_subscriptions` 两张表及索引，不修改既有任务表。后续数据库结构变化必须从 `0009` 起新增 migration。
+2.0 账户体系对应的 `migrations/0006_user_accounts.sql` 已进入生产基线。2.1 的 `migrations/0007_offline_task_mutations.sql` 已进入当前生产 schema；它只给既有任务表增加可空的客户端离线创建编号及唯一索引，用于安全重试，不删除、不重建也不修改既有任务内容。2.3 的 `migrations/0008_reminders.sql` 新增 `task_reminders` 与 `push_subscriptions` 两张表及索引，不修改既有任务表。账号主题使用 `migrations/0009_account_theme.sql` 为账号增加带默认值和枚举约束的 `theme_color` 字段，不修改任务数据。
 
 #### 2.3 发布顺序（含新 migration）
 

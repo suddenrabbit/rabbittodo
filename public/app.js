@@ -1,7 +1,8 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
-const APP_VERSION = "v20260807.005345";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v81";
+const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
+const APP_VERSION = "v20260812.173617";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v91";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -73,7 +74,7 @@ localStorage.removeItem("todo-identity");
 const state = {
   identity: "", username: "", encryptionSeed: "", authMode: "login", authPromptOpen: true, authSubmitting: false, authDirty: false,
   authError: "", authUsername: "", authPassword: "", authConfirm: "", authResetCode: "", identityDraft: "",
-  passwordDialog: false, tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, reminderPicker: null, pushStatus: null, dueReminders: [], draftTags: [], tagInput: "",
+  passwordDialog: false, themeColor: "violet", themeSaving: false, themeError: "", tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, reminderPicker: null, pushStatus: null, dueReminders: [], draftTags: [], tagInput: "",
   updateApplying: false,
   syncStatus: "idle", syncError: "", syncCount: 0,
 };
@@ -123,6 +124,7 @@ function currentLocalSnapshot() {
   return {
     username: state.username,
     encryptionSeed: state.encryptionSeed,
+    themeColor: normalizeThemeColor(state.themeColor),
     tasks: state.tasks,
     outbox: localProfile?.outbox || [],
     aliases: [...taskIdAliases.entries()],
@@ -145,6 +147,7 @@ async function restoreLocalSnapshot() {
     state.identity = "authenticated";
     state.username = profile.username;
     state.encryptionSeed = profile.encryptionSeed;
+    state.themeColor = normalizeThemeColor(profile.themeColor);
     state.authUsername = profile.username;
     state.authPromptOpen = false;
     state.tasks = Array.isArray(profile.tasks) ? profile.tasks : [];
@@ -258,6 +261,7 @@ async function refreshSessionLease() {
     const response = await api("/api/auth/session");
     if (!response.account?.encryptionSeed || response.account.username !== state.username) throw new Error("会话不匹配");
     state.encryptionSeed = response.account.encryptionSeed;
+    state.themeColor = normalizeThemeColor(response.account.themeColor);
     lastSessionLeaseAt = Date.now();
     await persistLocalSnapshot();
     return true;
@@ -725,6 +729,9 @@ async function enterAccount(account) {
   state.identity = "authenticated";
   state.username = account.username;
   state.encryptionSeed = seed;
+  state.themeColor = normalizeThemeColor(account.themeColor);
+  state.themeSaving = false;
+  state.themeError = "";
   encryptionKeyIdentity = "";
   encryptionKeyPromise = null;
   encryptionKeyV2Identity = "";
@@ -749,6 +756,30 @@ async function enterAccount(account) {
   if (serviceWorkerRegistration) await synchronizeForeground(); else await flushOutboxAndLoad();
   await subscribeIfPermitted();
   await refreshPushStatus();
+}
+
+async function updateThemeColor(nextTheme) {
+  const next = normalizeThemeColor(nextTheme);
+  if (state.themeSaving || next === state.themeColor) return;
+  const previous = state.themeColor;
+  state.themeColor = next;
+  state.themeSaving = true;
+  state.themeError = "";
+  render();
+  try {
+    const response = await api("/api/auth/preferences", { method: "PATCH", body: JSON.stringify({ themeColor: next }), decrypt: false });
+    state.themeColor = normalizeThemeColor(response.account?.themeColor);
+    state.themeSaving = false;
+    await persistLocalSnapshot();
+    render();
+  } catch (error) {
+    if (handleAuthenticationError(error)) return;
+    state.themeColor = previous;
+    state.themeSaving = false;
+    state.themeError = error.message || "主题颜色保存失败，请重试";
+    await persistLocalSnapshot().catch(() => {});
+    render();
+  }
 }
 
 function openAuth(mode = "login") {
@@ -880,7 +911,7 @@ async function submitAuthentication() {
 function handleAuthenticationError(error) {
   if (error.status !== 401 && error.status !== 403) return false;
   state.authUsername = state.username || state.authUsername;
-  state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = [];
+  state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.themeColor = "violet"; state.themeSaving = false; state.themeError = ""; state.tasks = [];
   state.authPassword = ""; state.authConfirm = ""; state.authResetCode = "";
   openAuth("login");
   state.authError = error.status === 403 ? "账号已禁用" : "登录状态已失效，请重新登录";
@@ -1409,7 +1440,7 @@ function identityGate() {
 }
 
 function pageHeader(heading) {
-  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的"><i class="avatar-icon"><img src="/rabbittodo-icon.png" alt="" /></i><span>Hi, ${escapeHtml(state.username || "我的")}</span></button></header>`;
+  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的"><i class="avatar-icon"><img src="/rabbittodo-avatar.png" alt="" /></i><span>Hi, ${escapeHtml(state.username || "我的")}</span></button></header>`;
 }
 
 function profilePage() {
@@ -1420,7 +1451,9 @@ function profilePage() {
   const devices = state.pushStatus?.devices || [];
   const deviceLink = notif.test ? `<a href="#" class="notification-devices" data-action="toggle-devices">${notif.deviceCount} 台设备</a>` : "";
   const devicePanel = state.pushDevicesOpen && devices.length ? `<div class="device-popover">${devices.map((device) => `<div class="device-item"><span class="device-name">${escapeHtml(deviceLabel(device.userAgent))}</span><span class="device-meta">注册于 ${escapeHtml(String(device.createdAt || "").slice(0, 10))}</span><button type="button" data-action="remove-device" data-endpoint="${escapeHtml(device.endpoint)}">移除</button></div>`).join("")}</div>` : "";
-  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-icon.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span>${passwordForm}<p class="notification-status">🔔 ${notif.label}（${deviceLink}）${notifLink}</p>${devicePanel}${notifBtn}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
+  const themeOptions = COLORS.map((color) => `<button type="button" class="theme-option theme-${color} ${state.themeColor === color ? "is-selected" : ""}" data-action="pick-theme" data-theme="${color}" aria-label="${COLOR_NAMES[color]}" aria-pressed="${state.themeColor === color}" ${state.themeSaving ? "disabled" : ""}><i></i><span>${COLOR_NAMES[color]}</span></button>`).join("");
+  const themeStatus = state.themeSaving ? '<p class="theme-status" role="status">正在保存主题…</p>' : state.themeError ? `<p class="theme-status is-error" role="alert">${escapeHtml(state.themeError)}</p>` : '<p class="theme-status">新建事项会默认使用所选主题色</p>';
+  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-avatar.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span><section class="theme-settings" aria-labelledby="theme-settings-title"><h2 id="theme-settings-title">主题颜色</h2><div class="theme-options">${themeOptions}</div>${themeStatus}</section>${passwordForm}<p class="notification-status">🔔 ${notif.label}（${deviceLink}）${notifLink}</p>${devicePanel}${notifBtn}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
 }
 
 function taskScrollContainer() {
@@ -1463,6 +1496,7 @@ function restoreTaskScroll(snapshot) {
 
 function render() {
   const scrollSnapshot = captureTaskScroll();
+  document.documentElement.dataset.theme = state.identity && !state.authPromptOpen ? normalizeThemeColor(state.themeColor) : "violet";
   persistentAvatar = app.querySelector(".avatar") || persistentAvatar;
   persistentProfileIcon = app.querySelector(".profile-icon") || persistentProfileIcon;
   persistentIdentitySymbol = app.querySelector(".identity-symbol") || persistentIdentitySymbol;
@@ -1478,10 +1512,14 @@ function render() {
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
     persistentAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
+    persistentAvatar.querySelector("img").src = nextAvatar.querySelector("img").src;
     nextAvatar.replaceWith(persistentAvatar);
   } else if (nextAvatar) persistentAvatar = nextAvatar;
   const nextProfileIcon = app.querySelector(".profile-icon");
-  if (persistentProfileIcon && nextProfileIcon && persistentProfileIcon !== nextProfileIcon) nextProfileIcon.replaceWith(persistentProfileIcon);
+  if (persistentProfileIcon && nextProfileIcon && persistentProfileIcon !== nextProfileIcon) {
+    persistentProfileIcon.querySelector("img").src = nextProfileIcon.querySelector("img").src;
+    nextProfileIcon.replaceWith(persistentProfileIcon);
+  }
   else if (nextProfileIcon) persistentProfileIcon = nextProfileIcon;
   const nextIdentitySymbol = app.querySelector(".identity-symbol");
   if (persistentIdentitySymbol && nextIdentitySymbol && persistentIdentitySymbol !== nextIdentitySymbol) nextIdentitySymbol.replaceWith(persistentIdentitySymbol);
@@ -1489,7 +1527,7 @@ function render() {
   restoreTaskScroll(scrollSnapshot);
 }
 
-function openEditor(task = { title: "", details: "", color: "violet", status: "none", tags: [], due_date: "", pinned: false, pinned_at: null, reminder: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned), reminder: task.reminder || null }; state.datePicker = null; state.reminderPicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
+function openEditor(task = { title: "", details: "", color: state.themeColor, status: "none", tags: [], due_date: "", pinned: false, pinned_at: null, reminder: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned), reminder: task.reminder || null }; state.datePicker = null; state.reminderPicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
 function commitTag() { const tag = state.tagInput.trim().replace(/^#/, ""); if (tag && !state.draftTags.includes(tag)) state.draftTags.push(tag); state.tagInput = ""; render(); document.querySelector("#tag-input")?.focus(); }
 
 function dragTargetList(pointerY) {
@@ -1751,13 +1789,14 @@ app.addEventListener("click", async (event) => {
     if (action === "auth-register") return openAuth("register");
     if (action === "auth-reset") return openAuth("reset");
     if (action === "change-password") { state.passwordDialog = !state.passwordDialog; return render(); }
+    if (action === "pick-theme") return updateThemeColor(button.dataset.theme);
     if (action === "logout") {
       await removePushSubscription();
       try { await api("/api/auth/logout", { method: "POST", body: "{}" }); } catch {}
       state.authUsername = state.username;
       await localClear().catch(() => {});
       localProfile = null; taskIdAliases.clear(); nextTemporaryTaskId = -1;
-      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; state.pushStatus = null; state.dueReminders = []; encryptionKeyIdentity = ""; encryptionKeyPromise = null; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null; return render();
+      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.themeColor = "violet"; state.themeSaving = false; state.themeError = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; state.pushStatus = null; state.dueReminders = []; encryptionKeyIdentity = ""; encryptionKeyPromise = null; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null; return render();
     }
     if (action === "enable-notifications") { await requestNotificationPermission(); await refreshPushStatus(); return render(); }
     if (action === "send-test-push") {
@@ -1987,7 +2026,7 @@ async function restoreSession() {
   try {
     const response = await api("/api/auth/session");
     if (!response.account || response.account.username !== rememberedUsername) throw new Error("会话不匹配");
-    state.identity = "authenticated"; state.username = response.account.username; state.encryptionSeed = response.account.encryptionSeed || state.encryptionSeed; state.authPromptOpen = false;
+    state.identity = "authenticated"; state.username = response.account.username; state.encryptionSeed = response.account.encryptionSeed || state.encryptionSeed; state.themeColor = normalizeThemeColor(response.account.themeColor); state.authPromptOpen = false;
     encryptionKeyIdentity = ""; encryptionKeyPromise = null; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null;
     lastSessionLeaseAt = Date.now();
     await persistLocalSnapshot();
