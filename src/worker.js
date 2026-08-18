@@ -51,7 +51,8 @@ function recordFailure(key) {
 }
 function clearFailure(key) { authFailures.delete(key); }
 function themeColor(value) { return COLORS.has(String(value || "")) ? String(value) : "violet"; }
-function publicAccount(row, includeSeed = true) { return { username: row.username, themeColor: themeColor(row.theme_color), ...(includeSeed ? { encryptionSeed: row.code } : {}) }; }
+function taskSortMode(value) { return value === "auto" ? "auto" : "manual"; }
+function publicAccount(row, includeSeed = true) { return { username: row.username, themeColor: themeColor(row.theme_color), taskSortMode: taskSortMode(row.task_sort_mode), ...(includeSeed ? { encryptionSeed: row.code } : {}) }; }
 function taskFromRow(row) { if (!row) return null; const { identity_code, reminder_at, reminder_tz, reminder_repeat_rule, reminder_enabled, ...task } = row; let tags = []; try { tags = JSON.parse(task.tags || "[]"); } catch {} return { ...task, completed: Boolean(task.completed), pinned: Boolean(task.pinned), tags, details: task.details || "", status: task.status || "none", reminder: reminderPublic({ reminder_at, reminder_tz, reminder_repeat_rule, reminder_enabled }) }; }
 function isEncryptedValue(value) { const raw = String(value || ""); return raw.startsWith(ENCRYPTION_PREFIX) || raw.startsWith(ENCRYPTION_PREFIX_V2); }
 function sanitizeTaskText(value, { field, plainLimit, encryptedLimit, required = false }) { const raw = String(value || "").trim(); if (!raw) { if (required) throw new Error(`请填写${field}`); return ""; } if (isEncryptedValue(raw)) { if (!ENCRYPTED_VALUE_PATTERN.test(raw) || raw.length > encryptedLimit) throw new Error(`${field}密文无效`); return raw; } return raw.slice(0, plainLimit); }
@@ -306,9 +307,15 @@ async function authApi(request, env, url) {
   if (request.method === "POST" && pathname === "/api/auth/logout") { const token = cookieValue(request, "rabbittodo_session"); if (token) await db.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run(); return json({ ok: true }, 200, { "Set-Cookie": clearSessionCookie(request) }); }
   if (request.method === "PATCH" && pathname === "/api/auth/preferences") {
     const account = await accountFromSession(request, db); if (!account) return json({ error: "请登录" }, 401);
-    const { themeColor: requestedTheme } = await bodyFrom(request);
-    if (!COLORS.has(String(requestedTheme || ""))) return json({ error: "主题颜色无效" }, 400);
-    await db.prepare("UPDATE identities SET theme_color = ? WHERE code = ?").bind(requestedTheme, account.code).run();
+    const preferences = await bodyFrom(request);
+    const hasTheme = Object.prototype.hasOwnProperty.call(preferences, "themeColor");
+    const hasSortMode = Object.prototype.hasOwnProperty.call(preferences, "taskSortMode");
+    if (!hasTheme && !hasSortMode) return json({ error: "未提供可保存的偏好" }, 400);
+    if (hasTheme && !COLORS.has(String(preferences.themeColor || ""))) return json({ error: "主题颜色无效" }, 400);
+    if (hasSortMode && !["manual", "auto"].includes(String(preferences.taskSortMode || ""))) return json({ error: "排序方式无效" }, 400);
+    if (hasTheme && hasSortMode) await db.prepare("UPDATE identities SET theme_color = ?, task_sort_mode = ? WHERE code = ?").bind(preferences.themeColor, preferences.taskSortMode, account.code).run();
+    else if (hasTheme) await db.prepare("UPDATE identities SET theme_color = ? WHERE code = ?").bind(preferences.themeColor, account.code).run();
+    else await db.prepare("UPDATE identities SET task_sort_mode = ? WHERE code = ?").bind(preferences.taskSortMode, account.code).run();
     const next = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(account.code).first();
     return json({ account: publicAccount(next) });
   }

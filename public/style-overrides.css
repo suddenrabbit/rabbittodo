@@ -684,6 +684,74 @@ body.is-task-dragging {
   text-align: left;
 }
 
+.sort-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  color: #9795a0;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.filter-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 2px 7px;
+}
+
+.filter-group-header > p {
+  margin: 0;
+  color: #8c8b95;
+  font-size: 12px;
+}
+
+.sort-mode-toggle {
+  width: 32px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 2px;
+  border: 0;
+  border-radius: 999px;
+  background: #d8d7df;
+  transition: background .18s ease;
+}
+
+.sort-mode-toggle i {
+  width: 14px;
+  height: 14px;
+  display: block;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px #25234328;
+  transition: transform .18s ease;
+}
+
+.sort-mode-toggle.is-auto {
+  background: var(--accent-strong);
+}
+
+.sort-mode-toggle.is-auto i {
+  transform: translateX(14px);
+}
+
+.sort-mode-toggle:disabled {
+  cursor: wait;
+  opacity: .72;
+}
+
+.sort-mode-status {
+  margin: -2px 1px 7px;
+  color: #b54752;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .filter-toggle-title {
   font-size: 14px;
   font-weight: 700;
@@ -1135,6 +1203,8 @@ body.is-task-dragging {
 @media (orientation: portrait) {
   :root .content-scroll.content-scroll-tasks {
     overflow: hidden;
+    padding-top: max(14px, env(safe-area-inset-top));
+    padding-bottom: max(18px, env(safe-area-inset-bottom));
   }
 
   :root .content-scroll-tasks .workspace {
@@ -1150,6 +1220,19 @@ body.is-task-dragging {
 
   :root .content-scroll-tasks .workspace-overview .topbar {
     padding-bottom: 10px;
+  }
+
+  :root .content-scroll-tasks .workspace-overview .topbar h1 {
+    transition: font-size .18s ease, line-height .18s ease;
+  }
+
+  :root .content-scroll-tasks .workspace.is-header-condensed .workspace-overview .topbar {
+    align-items: flex-end;
+  }
+
+  :root .content-scroll-tasks .workspace.is-header-condensed .workspace-overview .topbar h1 {
+    font-size: 24px;
+    line-height: 1;
   }
 
   :root .content-scroll-tasks .workspace-overview .filter-panel {

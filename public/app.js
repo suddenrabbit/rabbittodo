@@ -1,8 +1,10 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
 const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
-const APP_VERSION = "v20260812.173617";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v91";
+const SORT_MODES = ["manual", "auto"];
+const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
+const APP_VERSION = "v20260818.182428";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v96";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -32,6 +34,7 @@ const updateViewportClasses = () => {
     render();
   }
   wasLandscapeViewport = isLandscape;
+  updateTaskHeaderCompaction();
 };
 let isReloadingForServiceWorker = false;
 let serviceWorkerRegistration = null;
@@ -74,7 +77,7 @@ localStorage.removeItem("todo-identity");
 const state = {
   identity: "", username: "", encryptionSeed: "", authMode: "login", authPromptOpen: true, authSubmitting: false, authDirty: false,
   authError: "", authUsername: "", authPassword: "", authConfirm: "", authResetCode: "", identityDraft: "",
-  passwordDialog: false, themeColor: "violet", themeSaving: false, themeError: "", tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, reminderPicker: null, pushStatus: null, dueReminders: [], draftTags: [], tagInput: "",
+  passwordDialog: false, themeColor: "violet", themeSaving: false, themeError: "", taskSortMode: "manual", sortModeSaving: false, sortModeError: "", tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, reminderPicker: null, pushStatus: null, dueReminders: [], draftTags: [], tagInput: "",
   updateApplying: false,
   syncStatus: "idle", syncError: "", syncCount: 0,
 };
@@ -125,6 +128,7 @@ function currentLocalSnapshot() {
     username: state.username,
     encryptionSeed: state.encryptionSeed,
     themeColor: normalizeThemeColor(state.themeColor),
+    taskSortMode: normalizeTaskSortMode(state.taskSortMode),
     tasks: state.tasks,
     outbox: localProfile?.outbox || [],
     aliases: [...taskIdAliases.entries()],
@@ -148,6 +152,7 @@ async function restoreLocalSnapshot() {
     state.username = profile.username;
     state.encryptionSeed = profile.encryptionSeed;
     state.themeColor = normalizeThemeColor(profile.themeColor);
+    state.taskSortMode = normalizeTaskSortMode(profile.taskSortMode);
     state.authUsername = profile.username;
     state.authPromptOpen = false;
     state.tasks = Array.isArray(profile.tasks) ? profile.tasks : [];
@@ -262,6 +267,7 @@ async function refreshSessionLease() {
     if (!response.account?.encryptionSeed || response.account.username !== state.username) throw new Error("会话不匹配");
     state.encryptionSeed = response.account.encryptionSeed;
     state.themeColor = normalizeThemeColor(response.account.themeColor);
+    state.taskSortMode = normalizeTaskSortMode(response.account.taskSortMode);
     lastSessionLeaseAt = Date.now();
     await persistLocalSnapshot();
     return true;
@@ -732,6 +738,9 @@ async function enterAccount(account) {
   state.themeColor = normalizeThemeColor(account.themeColor);
   state.themeSaving = false;
   state.themeError = "";
+  state.taskSortMode = normalizeTaskSortMode(account.taskSortMode);
+  state.sortModeSaving = false;
+  state.sortModeError = "";
   encryptionKeyIdentity = "";
   encryptionKeyPromise = null;
   encryptionKeyV2Identity = "";
@@ -777,6 +786,30 @@ async function updateThemeColor(nextTheme) {
     state.themeColor = previous;
     state.themeSaving = false;
     state.themeError = error.message || "主题颜色保存失败，请重试";
+    await persistLocalSnapshot().catch(() => {});
+    render();
+  }
+}
+
+async function updateTaskSortMode(nextMode) {
+  const next = normalizeTaskSortMode(nextMode);
+  if (state.sortModeSaving || next === state.taskSortMode) return;
+  const previous = state.taskSortMode;
+  state.taskSortMode = next;
+  state.sortModeSaving = true;
+  state.sortModeError = "";
+  render();
+  try {
+    const response = await api("/api/auth/preferences", { method: "PATCH", body: JSON.stringify({ taskSortMode: next }), decrypt: false });
+    state.taskSortMode = normalizeTaskSortMode(response.account?.taskSortMode);
+    state.sortModeSaving = false;
+    await persistLocalSnapshot();
+    render();
+  } catch (error) {
+    if (handleAuthenticationError(error)) return;
+    state.taskSortMode = previous;
+    state.sortModeSaving = false;
+    state.sortModeError = error.message || "排序方式保存失败，请重试";
     await persistLocalSnapshot().catch(() => {});
     render();
   }
@@ -911,7 +944,7 @@ async function submitAuthentication() {
 function handleAuthenticationError(error) {
   if (error.status !== 401 && error.status !== 403) return false;
   state.authUsername = state.username || state.authUsername;
-  state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.themeColor = "violet"; state.themeSaving = false; state.themeError = ""; state.tasks = [];
+  state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.themeColor = "violet"; state.themeSaving = false; state.themeError = ""; state.taskSortMode = "manual"; state.sortModeSaving = false; state.sortModeError = ""; state.tasks = [];
   state.authPassword = ""; state.authConfirm = ""; state.authResetCode = "";
   openAuth("login");
   state.authError = error.status === 403 ? "账号已禁用" : "登录状态已失效，请重新登录";
@@ -1300,9 +1333,33 @@ function compareManualPosition(left, right) {
 }
 
 function compareTodoTasks(left, right) {
+  if (state.taskSortMode === "auto") return compareAutomaticTodoTasks(left, right);
   if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
   const manualOrder = compareManualPosition(left, right);
   if (manualOrder) return manualOrder;
+  const createdOrder = timestampValue(left.created_at) - timestampValue(right.created_at);
+  if (createdOrder) return createdOrder;
+  return Number(left.id) - Number(right.id);
+}
+
+function compareAutomaticTodoTasks(left, right) {
+  if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
+  if (left.pinned && right.pinned) {
+    const pinnedOrder = timestampValue(right.pinned_at) - timestampValue(left.pinned_at);
+    if (pinnedOrder) return pinnedOrder;
+    return Number(right.id) - Number(left.id);
+  }
+
+  const leftHasDueDate = Boolean(left.due_date);
+  const rightHasDueDate = Boolean(right.due_date);
+  if (leftHasDueDate !== rightHasDueDate) return leftHasDueDate ? -1 : 1;
+  if (leftHasDueDate && rightHasDueDate) {
+    const dueOrder = String(left.due_date).localeCompare(String(right.due_date));
+    if (dueOrder) return dueOrder;
+    const statusRank = { in_progress: 0, none: 1, paused: 2 };
+    const statusOrder = (statusRank[left.status || "none"] ?? 1) - (statusRank[right.status || "none"] ?? 1);
+    if (statusOrder) return statusOrder;
+  }
   const createdOrder = timestampValue(left.created_at) - timestampValue(right.created_at);
   if (createdOrder) return createdOrder;
   return Number(left.id) - Number(right.id);
@@ -1317,6 +1374,7 @@ function compareCompletedTasks(left, right) {
 function taskCard(task) {
   const overdue = isOverdue(task);
   const showPinned = task.pinned && !task.completed;
+  const draggable = !task.completed && state.taskSortMode === "manual";
   const status = task.status || "none";
   const statusBadge = !task.completed && status !== "none"
     ? `<span class="status-badge ${status}">${status === "in_progress" ? "进行中" : "暂停"}</span>`
@@ -1328,7 +1386,7 @@ function taskCard(task) {
   const due = task.due_date && (task.completed || !distanceBadge) ? `<span class="due"><i class="due-icon">📅</i><span class="due-label">${dateLabel(task.due_date)}</span></span>` : "";
   const reminderBadge = task.reminder ? `<span class="reminder-badge"><i class="reminder-icon">🔔</i>${reminderLabel(task.reminder)}</span>` : "";
   const syncBadge = task._unsynced ? '<span class="sync-badge">未同步</span>' : "";
-  return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : "is-draggable"} ${overdue ? "is-overdue" : ""} ${showPinned ? "is-pinned" : ""}" data-task-id="${task.id}">
+  return `<article class="task-card color-${task.color} ${task.completed ? "is-completed" : ""} ${draggable ? "is-draggable" : ""} ${overdue ? "is-overdue" : ""} ${showPinned ? "is-pinned" : ""}" data-task-id="${task.id}">
     <button class="check-button" data-action="toggle" data-id="${task.id}" aria-label="切换完成状态">${task.completed ? "✓" : ""}</button>
     <div class="task-body"><h3>${escapeHtml(task.title)}</h3><div class="task-meta">
       ${task.details ? `<p class="task-details">${escapeHtml(task.details)}</p>` : ""}${completionDate}${distanceBadge}${statusBadge}${due}${reminderBadge}${syncBadge}
@@ -1340,16 +1398,17 @@ function taskCard(task) {
 function taskLists(tasks) {
   const pageTasks = state.tasks.filter((task) => state.view === "done" ? task.completed : !task.completed);
   const hasPinnedZone = state.view === "todo" && pageTasks.some((task) => task.pinned);
+  const manualSorting = state.view === "todo" && state.taskSortMode === "manual";
   const emptyMessage = state.view === "done" ? "还没有已完成的事项。" : "这里还没有待办事项，点击 + 添加第一项吧。";
   const regularTasks = state.view === "done" ? tasks : tasks.filter((task) => !task.pinned);
   const regularTitle = state.view === "done" ? "已完成事项" : "待办事项";
   const regularIcon = state.view === "done" ? "✓" : "☐";
   const regularZone = (hasPinnedClass = "") => `<section class="regular-zone ${hasPinnedClass}">
     <header class="task-zone-title regular-zone-title"><span><i>${regularIcon}</i>${regularTitle}</span><b>${regularTasks.length}</b></header>
-    <section class="task-list regular-task-list" data-task-zone="regular">${regularTasks.map((task) => taskCard(task)).join("") || `<p class="${hasPinnedZone ? "drop-hint" : "empty-state"}">${hasPinnedZone ? "拖到这里取消置顶" : emptyMessage}</p>`}</section>
+    <section class="task-list regular-task-list" data-task-zone="regular">${regularTasks.map((task) => taskCard(task)).join("") || `<p class="${hasPinnedZone && manualSorting ? "drop-hint" : "empty-state"}">${hasPinnedZone && manualSorting ? "拖到这里取消置顶" : emptyMessage}</p>`}</section>
   </section>`;
   if (!hasPinnedZone) {
-    const temporaryPinnedZone = state.view === "todo" && tasks.length
+    const temporaryPinnedZone = manualSorting && tasks.length
       ? `<section class="pinned-zone is-empty-pinned-zone" data-pinned-zone aria-hidden="true">
         <section class="task-list pinned-task-list" data-task-zone="pinned"></section>
         <div class="temporary-pin-divider"><span>★ 置顶</span></div>
@@ -1361,7 +1420,7 @@ function taskLists(tasks) {
   const pinnedTasks = tasks.filter((task) => task.pinned);
   return `<section class="pinned-zone" data-pinned-zone>
     <header class="task-zone-title pinned-zone-title"><span><i>★</i>置顶事项</span><b>${pinnedTasks.length}</b></header>
-    <section class="task-list pinned-task-list" data-task-zone="pinned">${pinnedTasks.map((task) => taskCard(task)).join("") || '<p class="drop-hint">拖到这里置顶</p>'}</section>
+    <section class="task-list pinned-task-list" data-task-zone="pinned">${pinnedTasks.map((task) => taskCard(task)).join("") || `<p class="${manualSorting ? "drop-hint" : "empty-state"}">${manualSorting ? "拖到这里置顶" : emptyMessage}</p>`}</section>
   </section>
   ${regularZone("has-pinned-zone")}`;
 }
@@ -1379,7 +1438,10 @@ function syncNotice() {
 function filters() {
   const tags = ["全部", ...[...new Set(state.tasks.flatMap((task) => task.tags))].sort((a, b) => a.localeCompare(b, "zh-CN"))];
   const summary = [state.tag, state.color === "全部" ? "" : COLOR_NAMES[state.color]].filter((item) => item && item !== "全部").join(" · ") || `全部${state.view === "done" ? "已办" : "待办"}`;
-  return `<section class="filter-panel ${state.filtersOpen ? "is-open" : ""}"><button class="filter-toggle" data-action="toggle-filters" aria-expanded="${state.filtersOpen}"><span class="filter-toggle-title">筛选</span><span class="filter-toggle-summary">${summary}</span><i>⌄</i></button>${state.filtersOpen ? `<div class="filter-panel-content"><div class="filter-group"><p>按标签</p><div class="filters">${tags.map((tag) => `<button data-action="tag-filter" data-tag="${escapeHtml(tag)}" class="${state.tag === tag ? "filter-active" : ""}">${escapeHtml(tag)}</button>`).join("")}</div></div>
+  const automaticSorting = state.taskSortMode === "auto";
+  const sortControl = state.view === "todo" ? `<div class="sort-mode-switch"><span>自动排序</span><button class="sort-mode-toggle ${automaticSorting ? "is-auto" : ""}" data-action="toggle-sort-mode" type="button" role="switch" aria-label="自动排序" aria-checked="${automaticSorting}" ${state.sortModeSaving ? "disabled" : ""}><i></i></button></div>` : "";
+  const sortError = state.view === "todo" && state.sortModeError ? `<p class="sort-mode-status is-error" role="alert">${escapeHtml(state.sortModeError)}</p>` : "";
+  return `<section class="filter-panel ${state.filtersOpen ? "is-open" : ""}"><button class="filter-toggle" data-action="toggle-filters" aria-expanded="${state.filtersOpen}"><span class="filter-toggle-title">筛选</span><span class="filter-toggle-summary">${summary}</span><i>⌄</i></button>${state.filtersOpen ? `<div class="filter-panel-content"><div class="filter-group"><div class="filter-group-header"><p>按标签</p>${sortControl}</div>${sortError}<div class="filters">${tags.map((tag) => `<button data-action="tag-filter" data-tag="${escapeHtml(tag)}" class="${state.tag === tag ? "filter-active" : ""}">${escapeHtml(tag)}</button>`).join("")}</div></div>
   <div class="filter-group"><p>按颜色</p><div class="color-filters"><button data-action="color-filter" data-color="全部" class="${state.color === "全部" ? "filter-active" : ""}">全部</button>${COLORS.map((color) => `<button data-action="color-filter" data-color="${color}" class="color-filter ${color} ${state.color === color ? "filter-active" : ""}"><i></i>${COLOR_NAMES[color]}</button>`).join("")}</div></div>
   <p class="filter-result">找到 ${filteredTasks().length} 项符合条件的事项</p></div>` : ""}</section>`;
 }
@@ -1462,6 +1524,13 @@ function taskScrollContainer() {
   return app.querySelector(".content-scroll");
 }
 
+function updateTaskHeaderCompaction() {
+  const workspace = app.querySelector(".workspace");
+  const scroller = taskScrollContainer();
+  if (!workspace || !scroller) return;
+  workspace.classList.toggle("is-header-condensed", matchMedia("(orientation: portrait)").matches && scroller.scrollTop > 12);
+}
+
 function captureTaskScroll() {
   const workspace = app.querySelector(".workspace");
   if (!workspace
@@ -1525,6 +1594,9 @@ function render() {
   if (persistentIdentitySymbol && nextIdentitySymbol && persistentIdentitySymbol !== nextIdentitySymbol) nextIdentitySymbol.replaceWith(persistentIdentitySymbol);
   else if (nextIdentitySymbol) persistentIdentitySymbol = nextIdentitySymbol;
   restoreTaskScroll(scrollSnapshot);
+  const taskScroller = taskScrollContainer();
+  taskScroller?.addEventListener("scroll", updateTaskHeaderCompaction, { passive: true });
+  updateTaskHeaderCompaction();
 }
 
 function openEditor(task = { title: "", details: "", color: state.themeColor, status: "none", tags: [], due_date: "", pinned: false, pinned_at: null, reminder: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned), reminder: task.reminder || null }; state.datePicker = null; state.reminderPicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
@@ -1608,7 +1680,7 @@ function clearPointerDragHold(drag = pointerDrag) {
 }
 
 function startPointerDrag(event) {
-  if (!pointerDrag || pointerDrag.started) return;
+  if (!pointerDrag || pointerDrag.started || state.taskSortMode !== "manual") return;
   clearPointerDragHold();
   const rect = pointerDrag.card.getBoundingClientRect();
   const ghost = pointerDrag.card.cloneNode(true);
@@ -1651,7 +1723,7 @@ function dragLayoutChanged(initial, current) {
 }
 
 function persistDraggedOrder() {
-  if (state.view !== "todo") return;
+  if (state.view !== "todo" || state.taskSortMode !== "manual") return;
   const isPendingId = (id) => isPendingCreate(state.tasks.find((task) => Number(task.id) === Number(id)));
   const layout = visibleDragLayout();
   const pinnedIds = layout.pinned.filter((id) => !isPendingId(id));
@@ -1712,7 +1784,7 @@ function finishPointerDrag(cancelled = false) {
 }
 
 app.addEventListener("pointerdown", (event) => {
-  if (state.view !== "todo" || event.button !== 0 || pendingMutations || state.editor) return;
+  if (state.view !== "todo" || state.taskSortMode !== "manual" || event.button !== 0 || pendingMutations || state.editor) return;
   if (event.target.closest("button, input, textarea, select, label, a, [data-action]")) return;
   const card = event.target.closest(".task-card.is-draggable");
   if (!card) return;
@@ -1796,7 +1868,7 @@ app.addEventListener("click", async (event) => {
       state.authUsername = state.username;
       await localClear().catch(() => {});
       localProfile = null; taskIdAliases.clear(); nextTemporaryTaskId = -1;
-      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.themeColor = "violet"; state.themeSaving = false; state.themeError = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; state.pushStatus = null; state.dueReminders = []; encryptionKeyIdentity = ""; encryptionKeyPromise = null; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null; return render();
+      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.themeColor = "violet"; state.themeSaving = false; state.themeError = ""; state.taskSortMode = "manual"; state.sortModeSaving = false; state.sortModeError = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; state.pushStatus = null; state.dueReminders = []; encryptionKeyIdentity = ""; encryptionKeyPromise = null; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null; return render();
     }
     if (action === "enable-notifications") { await requestNotificationPermission(); await refreshPushStatus(); return render(); }
     if (action === "send-test-push") {
@@ -1823,6 +1895,7 @@ app.addEventListener("click", async (event) => {
       return render();
     }
     if (action === "toggle-filters") { state.filtersOpen = !state.filtersOpen; return render(); }
+    if (action === "toggle-sort-mode") return updateTaskSortMode(state.taskSortMode === "manual" ? "auto" : "manual");
     if (action === "tag-filter") { state.tag = button.dataset.tag; return render(); }
     if (action === "color-filter") { state.color = button.dataset.color; return render(); }
     if (action === "pick-color") { state.editor.color = button.dataset.color; return render(); }
@@ -2026,7 +2099,7 @@ async function restoreSession() {
   try {
     const response = await api("/api/auth/session");
     if (!response.account || response.account.username !== rememberedUsername) throw new Error("会话不匹配");
-    state.identity = "authenticated"; state.username = response.account.username; state.encryptionSeed = response.account.encryptionSeed || state.encryptionSeed; state.themeColor = normalizeThemeColor(response.account.themeColor); state.authPromptOpen = false;
+    state.identity = "authenticated"; state.username = response.account.username; state.encryptionSeed = response.account.encryptionSeed || state.encryptionSeed; state.themeColor = normalizeThemeColor(response.account.themeColor); state.taskSortMode = normalizeTaskSortMode(response.account.taskSortMode); state.authPromptOpen = false;
     encryptionKeyIdentity = ""; encryptionKeyPromise = null; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null;
     lastSessionLeaseAt = Date.now();
     await persistLocalSnapshot();
