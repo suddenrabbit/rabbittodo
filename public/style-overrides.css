@@ -1094,6 +1094,7 @@ body.is-task-dragging {
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll.content-scroll-tasks {
     overflow: hidden;
+    padding-bottom: 0;
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .workspace {
@@ -1201,10 +1202,14 @@ body.is-task-dragging {
 
 /* In portrait, keep the page heading and filters still while only tasks scroll. */
 @media (orientation: portrait) {
+  :root .content-scroll.content-scroll-tasks,
+  :root .content-scroll.content-scroll-profile {
+    padding-top: max(14px, env(safe-area-inset-top));
+  }
+
   :root .content-scroll.content-scroll-tasks {
     overflow: hidden;
-    padding-top: max(14px, env(safe-area-inset-top));
-    padding-bottom: max(18px, env(safe-area-inset-bottom));
+    padding-bottom: 0;
   }
 
   :root .content-scroll-tasks .workspace {
@@ -1400,6 +1405,69 @@ body.is-task-dragging {
 }
 .avatar-icon img,
 .profile-icon img { object-fit: contain; }
+
+/* 2.6 紧凑底栏：恢复全宽的普通导航，将新增操作收进中间栏位。 */
+:root .content-scroll.content-scroll-tasks {
+  padding-bottom: 0;
+}
+
+.tabbar.tabbar-compact {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  flex: 0 0 calc(64px + env(safe-area-inset-bottom));
+  height: calc(64px + env(safe-area-inset-bottom));
+  padding: 6px max(20px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  border-top: 1px solid #ecebf0;
+  background: #fff;
+}
+
+.tabbar.tabbar-compact.tabbar-has-add {
+  grid-template-columns: minmax(0, 1fr) 52px minmax(0, 1fr);
+}
+
+.tabbar-compact button {
+  width: 64px;
+  height: 52px;
+  justify-self: center;
+}
+
+.tabbar-compact .add-button {
+  display: grid;
+  place-items: center;
+  position: relative;
+  inset: auto;
+  left: auto;
+  bottom: auto;
+  padding: 0;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  color: #fff;
+  box-shadow: none;
+  transform: none;
+}
+
+.tabbar-compact .add-button::before {
+  content: none;
+}
+
+.tabbar-compact .add-button-icon {
+  display: block;
+  color: #fff;
+  font-family: Arial, sans-serif;
+  font-size: 32px;
+  font-weight: 300;
+  line-height: 1;
+  transform: translateY(1px);
+}
+
+.tabbar-compact .add-button:active {
+  background: var(--accent-strong);
+  transform: scale(.94);
+}
 
 .theme-settings { margin-top: 24px; padding-top: 20px; border-top: 1px solid #efedf3; }
 .theme-settings h2 { margin: 0 0 13px; color: #55535d; font-size: 13px; }
