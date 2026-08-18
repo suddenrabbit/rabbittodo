@@ -3,8 +3,8 @@ const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙
 const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260818.182428";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v96";
+const APP_VERSION = "v20260818.184129";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v98";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -1353,13 +1353,13 @@ function compareAutomaticTodoTasks(left, right) {
   const leftHasDueDate = Boolean(left.due_date);
   const rightHasDueDate = Boolean(right.due_date);
   if (leftHasDueDate !== rightHasDueDate) return leftHasDueDate ? -1 : 1;
+  const statusRank = { in_progress: 0, none: 1, paused: 2 };
   if (leftHasDueDate && rightHasDueDate) {
     const dueOrder = String(left.due_date).localeCompare(String(right.due_date));
     if (dueOrder) return dueOrder;
-    const statusRank = { in_progress: 0, none: 1, paused: 2 };
-    const statusOrder = (statusRank[left.status || "none"] ?? 1) - (statusRank[right.status || "none"] ?? 1);
-    if (statusOrder) return statusOrder;
   }
+  const statusOrder = (statusRank[left.status || "none"] ?? 1) - (statusRank[right.status || "none"] ?? 1);
+  if (statusOrder) return statusOrder;
   const createdOrder = timestampValue(left.created_at) - timestampValue(right.created_at);
   if (createdOrder) return createdOrder;
   return Number(left.id) - Number(right.id);
