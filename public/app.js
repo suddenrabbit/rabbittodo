@@ -3,8 +3,8 @@ const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙
 const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260818.202521";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v101";
+const APP_VERSION = "v20260819.212019";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v103";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
@@ -1501,8 +1501,8 @@ function identityGate() {
   return `<div class="identity-gate"><section class="identity-card ${submitting ? "is-submitting" : ""}" id="auth-panel"><div class="identity-symbol"><img src="/rabbittodo-icon.png" alt="RabbitToDo 兔子图标" /></div><p>RabbitToDo</p><h2>${title}</h2><span>${hint}</span>${fields}${errorMessage}<button class="save-button identity-submit-button" type="button" data-action="submit-auth" ${submitting ? "disabled" : ""}>${submitting ? "处理中…" : submitLabel}</button><div class="auth-links">${mode !== "login" ? '<button type="button" data-action="auth-login">返回登录</button>' : '<button type="button" data-action="auth-register">创建新账号</button>'}${mode === "login" ? '<button type="button" data-action="auth-reset">使用重置码</button>' : ""}</div></section></div>`;
 }
 
-function pageHeader(heading) {
-  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">RabbitToDo</b>　${new Intl.DateTimeFormat("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的"><i class="avatar-icon"><img src="/rabbittodo-avatar.png" alt="" /></i><span>Hi, ${escapeHtml(state.username || "我的")}</span></button></header>`;
+function pageHeader(heading, brand = "RabbitToDo") {
+  return `<header class="topbar"><div><p class="eyebrow"><b class="brand-inline">${brand}</b>　${new Intl.DateTimeFormat("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p><h1>${heading}</h1></div><button class="avatar" data-action="profile" aria-label="查看我的"><i class="avatar-icon"><img src="/rabbittodo-avatar.png" alt="" /></i><span>Hi, ${escapeHtml(state.username || "我的")}</span></button></header>`;
 }
 
 function profilePage() {
@@ -1572,7 +1572,7 @@ function render() {
   const tasks = filteredTasks();
   const taskContent = taskLists(tasks);
   const heading = { todo: "待办", done: "已办", profile: "我的" }[state.view];
-  const overviewContent = `${pageHeader(heading)}${filters()}`;
+  const overviewContent = `${pageHeader(heading, state.view === "done" ? "RabbitDone" : "RabbitToDo")}${filters()}`;
   const pageContent = state.view === "profile"
     ? profilePage()
     : `<section class="workspace workspace-${state.view}" data-view="${state.view}" data-tag="${escapeHtml(state.tag)}" data-color="${escapeHtml(state.color)}"><aside class="workspace-overview">${overviewContent}</aside><main class="workspace-tasks">${syncNotice()}${dueReminderBanner()}${taskContent}<p class="task-encryption-note"><i>🔒</i>待办事项内容均已加密存储</p></main></section>`;

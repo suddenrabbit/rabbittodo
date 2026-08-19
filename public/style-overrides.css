@@ -296,7 +296,7 @@ button.sync-notice { text-decoration: underline; text-decoration-color: #d8c397;
 .task-body { min-width: 0; overflow: hidden; }
 
 .pinned-zone {
-  margin-top: 20px;
+  margin-top: 12px;
   padding: 0 0 14px;
   border-bottom: 1px solid #dfdee6;
 }
@@ -311,14 +311,14 @@ button.sync-notice { text-decoration: underline; text-decoration-color: #d8c397;
 
 .workspace-tasks.is-drag-active .pinned-zone.is-empty-pinned-zone {
   display: block;
-  margin-top: 14px;
+  margin-top: 12px;
   padding: 0;
   border: 0;
   animation: pinned-divider-in .16s ease-out;
 }
 
 .workspace-tasks.is-drag-active .pinned-zone.is-empty-pinned-zone + .regular-zone {
-  margin-top: 7px;
+  margin-top: 10px;
 }
 
 .workspace-tasks.is-drag-active .pinned-zone.is-empty-pinned-zone .task-list {
@@ -402,11 +402,11 @@ button.sync-notice { text-decoration: underline; text-decoration-color: #d8c397;
 }
 
 .regular-zone {
-  margin-top: 20px;
+  margin-top: 12px;
 }
 
 .regular-zone.has-pinned-zone {
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .regular-zone .task-list {
@@ -666,18 +666,18 @@ body.is-task-dragging {
 }
 
 .filter-panel {
-  margin: 16px 0 6px;
+  margin: 12px 0 0;
 }
 
 .filter-toggle {
   width: 100%;
-  min-height: 46px;
+  min-height: 40px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 15px;
+  gap: 8px;
+  padding: 0 13px;
   border: 1px solid #e8e7ee;
-  border-radius: 15px;
+  border-radius: 13px;
   background: #fff;
   color: #373640;
   box-shadow: 0 3px 10px #25234308;
