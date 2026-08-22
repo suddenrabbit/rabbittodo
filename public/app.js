@@ -3,8 +3,8 @@ const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙
 const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260822.091737";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v108";
+const APP_VERSION = "v20260823.003009";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v113";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_UPDATE_TIMEOUT = 5_000;
@@ -25,12 +25,33 @@ document.documentElement.classList.toggle("is-ipad", isIPad);
 document.documentElement.classList.toggle("is-touch-device", navigator.maxTouchPoints > 0 || matchMedia("(pointer: coarse)").matches);
 const isLandscapeViewport = () => window.innerWidth > window.innerHeight;
 let wasLandscapeViewport = isLandscapeViewport();
+let tabbarAlignmentFrame = 0;
+const scheduleTabbarAlignment = () => {
+  cancelAnimationFrame(tabbarAlignmentFrame);
+  tabbarAlignmentFrame = requestAnimationFrame(() => {
+    const tabbar = app.querySelector(".tabbar-compact");
+    if (!tabbar) return;
+    tabbar.style.removeProperty("--tabbar-center-x");
+    if (!isLandscapeViewport() || state.view === "profile") return;
+    const phone = app.querySelector(".phone");
+    const taskPane = app.querySelector(".workspace-tasks");
+    if (!phone || !taskPane) return;
+    const phoneRect = phone.getBoundingClientRect();
+    const taskPaneRect = taskPane.getBoundingClientRect();
+    tabbar.style.setProperty("--tabbar-center-x", `${taskPaneRect.left - phoneRect.left + taskPaneRect.width / 2}px`);
+  });
+};
 const updateViewportClasses = () => {
   const isLandscape = isLandscapeViewport();
   document.documentElement.classList.toggle("is-compact-landscape", isLandscape);
   if (isLandscape && !wasLandscapeViewport) {
     state.filtersOpen = true;
     render();
+  } else if (!isLandscape && wasLandscapeViewport) {
+    state.filtersOpen = false;
+    render();
+  } else {
+    scheduleTabbarAlignment();
   }
   wasLandscapeViewport = isLandscape;
 };
@@ -1604,6 +1625,7 @@ function render() {
   if (persistentIdentitySymbol && nextIdentitySymbol && persistentIdentitySymbol !== nextIdentitySymbol) nextIdentitySymbol.replaceWith(persistentIdentitySymbol);
   else if (nextIdentitySymbol) persistentIdentitySymbol = nextIdentitySymbol;
   restoreTaskScroll(scrollSnapshot);
+  scheduleTabbarAlignment();
 }
 
 function openEditor(task = { title: "", details: "", color: state.themeColor, status: "none", tags: [], due_date: "", pinned: false, pinned_at: null, reminder: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned), reminder: task.reminder || null }; state.datePicker = null; state.reminderPicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }

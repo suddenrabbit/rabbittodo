@@ -1398,11 +1398,11 @@ body.is-task-dragging {
 .avatar-icon img,
 .profile-icon img { object-fit: contain; }
 
-/* 2.6 紧凑毛玻璃底栏：列表延伸到底栏背后，末尾仍可完整滚出遮挡区。 */
+/* 2.6 紧凑悬浮胶囊底栏：列表延伸到底栏背后，末尾仍可完整滚出遮挡区。 */
 :root .content-scroll.content-scroll-tasks,
 :root .content-scroll.content-scroll-profile {
-  padding-bottom: calc(68px + env(safe-area-inset-bottom));
-  scroll-padding-bottom: calc(68px + env(safe-area-inset-bottom));
+  padding-bottom: calc(74px + env(safe-area-inset-bottom));
+  scroll-padding-bottom: calc(74px + env(safe-area-inset-bottom));
 }
 
 .tabbar.tabbar-compact {
@@ -1411,21 +1411,24 @@ body.is-task-dragging {
   align-items: center;
   position: absolute;
   z-index: 6;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  flex: 0 0 calc(56px + env(safe-area-inset-bottom));
-  height: calc(56px + env(safe-area-inset-bottom));
-  padding: 4px max(20px, env(safe-area-inset-right)) calc(2px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
-  border-top: 1px solid rgba(255, 255, 255, .64);
-  background: rgba(248, 248, 250, .45);
-  box-shadow: 0 -8px 24px rgba(32, 33, 38, .06);
-  -webkit-backdrop-filter: blur(16px) saturate(150%);
-  backdrop-filter: blur(16px) saturate(150%);
+  right: auto;
+  bottom: calc(env(safe-area-inset-bottom) + 6px);
+  left: var(--tabbar-center-x, 50%);
+  flex: 0 0 56px;
+  width: min(calc(100% - 32px), 280px);
+  height: 56px;
+  padding: 4px 10px 2px;
+  border: 1px solid rgba(255, 255, 255, .30);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, .24);
+  box-shadow: 0 8px 24px rgba(32, 33, 38, .08), 0 1px 4px rgba(32, 33, 38, .035), inset 0 1px 0 rgba(255, 255, 255, .30);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  transform: translateX(-50%);
 }
 
 .tabbar.tabbar-compact.tabbar-has-add {
-  grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr);
 }
 
 .tabbar-compact button {
@@ -1434,6 +1437,21 @@ body.is-task-dragging {
   gap: 2px;
   font-size: 10px;
   justify-self: center;
+}
+
+.tabbar-compact > button:not(.add-button) {
+  border-radius: 22px;
+  transition: width .18s ease, color .18s ease, background-color .18s ease, box-shadow .18s ease, transform .12s ease;
+}
+
+.tabbar-compact > button:not(.add-button).active {
+  width: 72px;
+  background: rgba(118, 118, 128, .10);
+  box-shadow: 0 2px 8px rgba(32, 33, 38, .05);
+}
+
+.tabbar-compact > button:not(.add-button):active {
+  transform: scale(.96);
 }
 
 .tabbar-compact button > span {
@@ -1485,8 +1503,8 @@ body.is-task-dragging {
   }
 
   :root .content-scroll-tasks .workspace-tasks {
-    padding-bottom: calc(68px + env(safe-area-inset-bottom));
-    scroll-padding-bottom: calc(68px + env(safe-area-inset-bottom));
+    padding-bottom: calc(74px + env(safe-area-inset-bottom));
+    scroll-padding-bottom: calc(74px + env(safe-area-inset-bottom));
   }
 }
 
@@ -1497,8 +1515,8 @@ body.is-task-dragging {
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll-tasks .workspace-tasks {
-    padding-bottom: calc(68px + env(safe-area-inset-bottom));
-    scroll-padding-bottom: calc(68px + env(safe-area-inset-bottom));
+    padding-bottom: calc(74px + env(safe-area-inset-bottom));
+    scroll-padding-bottom: calc(74px + env(safe-area-inset-bottom));
   }
 }
 
