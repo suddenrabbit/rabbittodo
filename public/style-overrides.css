@@ -1407,21 +1407,28 @@ body.is-task-dragging {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
-  flex: 0 0 calc(64px + env(safe-area-inset-bottom));
-  height: calc(64px + env(safe-area-inset-bottom));
-  padding: 6px max(20px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  flex: 0 0 calc(56px + env(safe-area-inset-bottom));
+  height: calc(56px + env(safe-area-inset-bottom));
+  padding: 4px max(20px, env(safe-area-inset-right)) calc(2px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
   border-top: 1px solid #ecebf0;
   background: #fff;
 }
 
 .tabbar.tabbar-compact.tabbar-has-add {
-  grid-template-columns: minmax(0, 1fr) 52px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr);
 }
 
 .tabbar-compact button {
-  width: 64px;
-  height: 52px;
+  width: 56px;
+  height: 44px;
+  gap: 2px;
+  font-size: 10px;
   justify-self: center;
+}
+
+.tabbar-compact button > span {
+  font-size: 22px;
+  line-height: 22px;
 }
 
 .tabbar-compact .add-button {
