@@ -1398,20 +1398,30 @@ body.is-task-dragging {
 .avatar-icon img,
 .profile-icon img { object-fit: contain; }
 
-/* 2.6 紧凑底栏：恢复全宽的普通导航，将新增操作收进中间栏位。 */
-:root .content-scroll.content-scroll-tasks {
-  padding-bottom: 0;
+/* 2.6 紧凑毛玻璃底栏：列表延伸到底栏背后，末尾仍可完整滚出遮挡区。 */
+:root .content-scroll.content-scroll-tasks,
+:root .content-scroll.content-scroll-profile {
+  padding-bottom: calc(68px + env(safe-area-inset-bottom));
+  scroll-padding-bottom: calc(68px + env(safe-area-inset-bottom));
 }
 
 .tabbar.tabbar-compact {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
+  position: absolute;
+  z-index: 6;
+  right: 0;
+  bottom: 0;
+  left: 0;
   flex: 0 0 calc(56px + env(safe-area-inset-bottom));
   height: calc(56px + env(safe-area-inset-bottom));
   padding: 4px max(20px, env(safe-area-inset-right)) calc(2px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
-  border-top: 1px solid #ecebf0;
-  background: #fff;
+  border-top: 1px solid rgba(255, 255, 255, .64);
+  background: rgba(248, 248, 250, .6);
+  box-shadow: 0 -8px 24px rgba(32, 33, 38, .06);
+  -webkit-backdrop-filter: blur(20px) saturate(165%);
+  backdrop-filter: blur(20px) saturate(165%);
 }
 
 .tabbar.tabbar-compact.tabbar-has-add {
@@ -1466,6 +1476,30 @@ body.is-task-dragging {
 .tabbar-compact .add-button:active {
   background: var(--accent-strong);
   transform: scale(.94);
+}
+
+@media (orientation: portrait) {
+  :root .content-scroll.content-scroll-tasks {
+    padding-bottom: 0;
+    scroll-padding-bottom: 0;
+  }
+
+  :root .content-scroll-tasks .workspace-tasks {
+    padding-bottom: calc(68px + env(safe-area-inset-bottom));
+    scroll-padding-bottom: calc(68px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (orientation: landscape) {
+  :root:is(.is-touch-device, .is-compact-landscape) .content-scroll.content-scroll-tasks {
+    padding-bottom: 0;
+    scroll-padding-bottom: 0;
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .content-scroll-tasks .workspace-tasks {
+    padding-bottom: calc(68px + env(safe-area-inset-bottom));
+    scroll-padding-bottom: calc(68px + env(safe-area-inset-bottom));
+  }
 }
 
 .theme-settings { margin-top: 24px; padding-top: 20px; border-top: 1px solid #efedf3; }
