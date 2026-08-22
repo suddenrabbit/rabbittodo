@@ -65,7 +65,7 @@ button { border: 0; cursor: pointer; }
 .console-brand h1 { margin: 0; font-size: 25px; }
 .logout-button { padding: 9px 13px; border-radius: 10px; background: #eceaf5; color: #696773; font-size: 12px; }
 
-.summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 26px 0 18px; }
+.summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 26px 0 18px; }
 .summary-card { padding: 17px 18px; border: 1px solid var(--line); border-radius: 17px; background: #fff; }
 .summary-card span { color: var(--muted); font-size: 11px; }
 .summary-card strong { display: block; margin-top: 4px; font-size: 25px; }
@@ -83,7 +83,6 @@ button { border: 0; cursor: pointer; }
 .identity-code { font-size: 16px; font-weight: 800; letter-spacing: 1.5px; }
 .muted { color: var(--muted); font-size: 11px; }
 .status-badge { display: inline-flex; padding: 5px 8px; border-radius: 9px; font-size: 11px; font-weight: 750; }
-.status-pending { background: #fff0d6; color: #b67428; }
 .status-enabled { background: #def4eb; color: #438d77; }
 .status-disabled { background: #f5e1e4; color: #b1535d; }
 .action-group { display: flex; flex-wrap: wrap; gap: 6px; }

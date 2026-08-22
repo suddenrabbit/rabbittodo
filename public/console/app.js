@@ -39,14 +39,13 @@ function loginPage() {
 
 function actionButtons(user) {
   const status = user.status === "enabled" ? `<button class="action-button action-disable" data-action="set-status" data-code="${encodeURIComponent(user.code)}" data-status="disabled">禁用</button>` : `<button class="action-button action-enable" data-action="set-status" data-code="${encodeURIComponent(user.code)}" data-status="enabled">重新启用</button>`;
-  if (user.legacy) return `<div class="action-group">${status}<span class="muted">等待旧用户升级</span></div>`;
   return `<div class="action-group">${status}<button class="action-button" data-action="reset" data-code="${encodeURIComponent(user.code)}">重置密码</button></div>`;
 }
 
 function consolePage() {
   const counts = Object.fromEntries(["enabled", "disabled"].map((status) => [status, state.identities.filter((item) => item.status === status).length]));
   const identities = state.filter === "all" ? state.identities : state.identities.filter((item) => item.status === state.filter);
-  const rows = identities.map((user) => `<tr><td><span class="identity-code">${escapeHtml(user.username || "旧身份码用户")}</span></td><td><span class="status-badge status-${user.status}">${STATUS_LABELS[user.status]}</span></td><td><span class="muted">${dateTimeLabel(user.created_at)}</span></td><td>${user.task_count}</td><td>${actionButtons(user)}</td></tr>`).join("");
+  const rows = identities.map((user) => `<tr><td><span class="identity-code">${escapeHtml(user.username)}</span></td><td><span class="status-badge status-${user.status}">${STATUS_LABELS[user.status]}</span></td><td><span class="muted">${dateTimeLabel(user.created_at)}</span></td><td>${user.task_count}</td><td>${actionButtons(user)}</td></tr>`).join("");
   const reset = state.resetCode ? `<div class="reset-code">一次性重置码（仅显示一次）：<strong>${escapeHtml(state.resetCode)}</strong></div>` : "";
   return `<section class="console-shell"><header class="console-header"><div class="console-brand"><div class="brand-icon"><img src="/rabbittodo-icon.png" alt="" /></div><div><p>RabbitToDo Console</p><h1>用户管理</h1></div></div><button class="logout-button" data-action="logout">退出登录</button></header><section class="summary-grid"><div class="summary-card"><span>全部用户</span><strong>${state.identities.length}</strong></div><div class="summary-card"><span>已启用</span><strong>${counts.enabled}</strong></div><div class="summary-card"><span>已禁用</span><strong>${counts.disabled}</strong></div></section>${reset}<div class="toolbar"><div class="filters">${Object.entries(STATUS_LABELS).map(([status, label]) => `<button data-action="filter" data-filter="${status}" class="${state.filter === status ? "is-active" : ""}">${label}</button>`).join("")}</div><button class="refresh-button" data-action="refresh">${state.loading ? "刷新中…" : "刷新"}</button></div><div class="identity-table-wrap">${rows ? `<table class="identity-table"><thead><tr><th>用户名</th><th>状态</th><th>创建时间</th><th>任务数</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty-state">当前筛选下没有用户</div>'}</div></section>`;
 }

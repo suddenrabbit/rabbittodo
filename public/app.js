@@ -3,22 +3,21 @@ const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙
 const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260819.212019";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v103";
+const APP_VERSION = "v20260822.084017";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v104";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
+const SERVICE_WORKER_UPDATE_TIMEOUT = 5_000;
+const SYNC_REQUEST_TIMEOUT = 8_000;
 const SERVICE_WORKER_CHECK_KEY = "rabbittodo-sw-last-check";
 const TOUCH_DRAG_HOLD_MS = 350;
 const LOCAL_STORE_NAME = "rabbittodo-local-v1";
 const LOCAL_STORE_KEY = "active-account";
 const SYNC_RETRY_DELAYS = [5_000, 30_000, 120_000, 600_000];
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
-const ENCRYPTION_PREFIX = "rtenc:v1:";
 const ENCRYPTION_PREFIX_V2 = "rtenc:v2:";
-const ENCRYPTION_SALT = "RabbitToDo task content v1";
 const ENCRYPTION_SALT_V2 = "RabbitToDo task content v2";
 const ENCRYPTION_INFO_V2 = "task-content";
-const ENCRYPTION_ITERATIONS = 120_000;
 const USERNAME_PATTERN = /^[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_]{1,9}$/u;
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -34,7 +33,6 @@ const updateViewportClasses = () => {
     render();
   }
   wasLandscapeViewport = isLandscape;
-  updateTaskHeaderCompaction();
 };
 let isReloadingForServiceWorker = false;
 let serviceWorkerRegistration = null;
@@ -42,6 +40,8 @@ let serviceWorkerUpdatePromise = null;
 let serviceWorkerUpdateRetryTimer = 0;
 let serviceWorkerVersionProbeScheduled = false;
 let foregroundSyncPromise = null;
+let foregroundSyncEpoch = 0;
+let foregroundSyncPromiseEpoch = 0;
 let lastSessionLeaseAt = 0;
 let localStorePromise = null;
 let localProfile = null;
@@ -54,11 +54,10 @@ const preventPageZoom = (event) => {
 };
 document.addEventListener("gesturestart", preventPageZoom, { passive: false });
 document.addEventListener("gesturechange", preventPageZoom, { passive: false });
-document.addEventListener("touchmove", preventPageZoom, { passive: false });
 let taskSyncPromise = null;
 let lastTaskSyncAt = 0;
-let mutationChain = Promise.resolve();
 let pendingMutations = 0;
+let taskStateRevision = 0;
 let nextTemporaryTaskId = -1;
 const taskIdAliases = new Map();
 let persistentAvatar = null;
@@ -68,8 +67,6 @@ let pointerDrag = null;
 let suppressCardClickUntil = 0;
 let dragAutoScrollFrame = 0;
 let dragAutoScrollSpeed = 0;
-let encryptionKeyIdentity = "";
-let encryptionKeyPromise = null;
 let encryptionKeyV2Identity = "";
 let encryptionKeyV2Promise = null;
 localStorage.removeItem("todo-identity");
@@ -160,8 +157,6 @@ async function restoreLocalSnapshot() {
     taskIdAliases.clear();
     (Array.isArray(profile.aliases) ? profile.aliases : []).forEach(([from, to]) => taskIdAliases.set(Number(from), Number(to)));
     markQueuedTasksUnsynced();
-    encryptionKeyIdentity = "";
-    encryptionKeyPromise = null;
     encryptionKeyV2Identity = "";
     encryptionKeyV2Promise = null;
     render();
@@ -194,6 +189,20 @@ function scheduleServiceWorkerRetry() {
   sessionStorage.setItem(SERVICE_WORKER_CHECK_KEY, String(retryFrom));
 }
 
+function timeoutError(message) {
+  const error = new Error(message);
+  error.code = "timeout";
+  return error;
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timer = 0;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(timeoutError(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function watchServiceWorkerInstallation(registration) {
   registration.addEventListener("updatefound", () => {
     const installingWorker = registration.installing;
@@ -214,11 +223,16 @@ function checkForServiceWorkerUpdate({ force = false } = {}) {
     return Promise.resolve();
   }
   sessionStorage.setItem(SERVICE_WORKER_CHECK_KEY, String(now));
-  serviceWorkerUpdatePromise = serviceWorkerRegistration.update()
+  const updateAttempt = serviceWorkerRegistration.update()
     .then((registration) => {
       if (registration.waiting) applyServiceWorkerUpdate();
       probeServiceWorkerVersion();
     })
+    .catch((error) => {
+      scheduleServiceWorkerRetry();
+      throw error;
+    });
+  serviceWorkerUpdatePromise = withTimeout(updateAttempt, SERVICE_WORKER_UPDATE_TIMEOUT, "应用更新检查超时")
     .catch(() => scheduleServiceWorkerRetry())
     .finally(() => { serviceWorkerUpdatePromise = null; });
   return serviceWorkerUpdatePromise;
@@ -251,19 +265,31 @@ function reloadForServiceWorkerUpdate() {
 function synchronizeForeground() {
   // 首次加载要等 register() 完成；否则 pageshow 会抢先同步数据。
   if ("serviceWorker" in navigator && !serviceWorkerRegistration) return Promise.resolve();
-  if (foregroundSyncPromise) return foregroundSyncPromise;
+  if (foregroundSyncPromise) {
+    if (foregroundSyncPromiseEpoch === foregroundSyncEpoch) return foregroundSyncPromise;
+    const activeSync = foregroundSyncPromise;
+    return activeSync.then(() => synchronizeForeground());
+  }
+  const epoch = ++foregroundSyncEpoch;
+  foregroundSyncPromiseEpoch = epoch;
   foregroundSyncPromise = (async () => {
-    // Update checks must happen before remote sync, but never delay local rendering.
+    // 更新检查必须先开始并在有限时间内结束，不能永久阻塞远端同步。
     await checkForServiceWorkerUpdate({ force: true });
-    if (!state.updateApplying && await refreshSessionLease()) await flushOutboxAndLoad();
-  })().finally(() => { foregroundSyncPromise = null; });
+    if (epoch !== foregroundSyncEpoch || state.updateApplying) return;
+    if (await refreshSessionLease({ epoch })) await flushOutboxAndLoad(epoch);
+  })().finally(() => {
+    foregroundSyncPromise = null;
+    foregroundSyncPromiseEpoch = 0;
+  });
   return foregroundSyncPromise;
 }
 
-async function refreshSessionLease() {
+async function refreshSessionLease({ epoch = foregroundSyncEpoch } = {}) {
   if (!state.identity || Date.now() - lastSessionLeaseAt < 7 * 86400_000) return true;
+  const expectedUsername = state.username;
   try {
-    const response = await api("/api/auth/session");
+    const response = await api("/api/auth/session", { decrypt: false, timeoutMs: SYNC_REQUEST_TIMEOUT });
+    if (epoch !== foregroundSyncEpoch || state.username !== expectedUsername) return false;
     if (!response.account?.encryptionSeed || response.account.username !== state.username) throw new Error("会话不匹配");
     state.encryptionSeed = response.account.encryptionSeed;
     state.themeColor = normalizeThemeColor(response.account.themeColor);
@@ -272,7 +298,11 @@ async function refreshSessionLease() {
     await persistLocalSnapshot();
     return true;
   } catch (error) {
-    handleAuthenticationError(error);
+    if (!handleAuthenticationError(error)) {
+      setSyncStatus("failed", `会话检查失败：${error.message || "网络不可用"}`);
+      render();
+      scheduleOutboxSync(SYNC_RETRY_DELAYS[Math.min(outboxRetryAttempt++, SYNC_RETRY_DELAYS.length - 1)]);
+    }
     return false;
   }
 }
@@ -288,9 +318,9 @@ function dateInShanghai(value = new Date()) {
 }
 const today = () => dateInShanghai();
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
-const isEncryptedText = (value) => {
+const isV2EncryptedText = (value) => {
   const text = String(value || "");
-  return text.startsWith(ENCRYPTION_PREFIX) || text.startsWith(ENCRYPTION_PREFIX_V2);
+  return /^rtenc:v2:[A-Za-z0-9+/]+={0,2}$/.test(text);
 };
 
 function bytesToBase64(bytes) {
@@ -308,27 +338,6 @@ function base64ToBytes(value) {
 
 function identitySeedBytes(seed = state.encryptionSeed) {
   return urlBase64ToUint8Array(String(seed || "").replace(/^u_/, ""));
-}
-
-function encryptionKeyFor(seed = state.encryptionSeed) {
-  if (!seed || !window.crypto?.subtle) {
-    throw new Error("当前浏览器无法启用任务内容加密");
-  }
-  if (encryptionKeyIdentity === seed && encryptionKeyPromise) return encryptionKeyPromise;
-  encryptionKeyIdentity = seed;
-  encryptionKeyPromise = crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(seed),
-    "PBKDF2",
-    false,
-    ["deriveKey"],
-  ).then((keyMaterial) => crypto.subtle.deriveKey({
-    name: "PBKDF2",
-    salt: new TextEncoder().encode(ENCRYPTION_SALT),
-    iterations: ENCRYPTION_ITERATIONS,
-    hash: "SHA-256",
-  }, keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]));
-  return encryptionKeyPromise;
 }
 
 function encryptionKeyForV2(seed = state.encryptionSeed) {
@@ -354,7 +363,7 @@ function encryptionKeyForV2(seed = state.encryptionSeed) {
 
 async function encryptText(value, identity = state.encryptionSeed) {
   const plaintext = String(value || "");
-  if (!plaintext || isEncryptedText(plaintext)) return plaintext;
+  if (!plaintext) return "";
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = new Uint8Array(await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
@@ -369,13 +378,14 @@ async function encryptText(value, identity = state.encryptionSeed) {
 
 async function decryptText(value, identity = state.encryptionSeed) {
   const stored = String(value || "");
-  if (!isEncryptedText(stored)) return stored;
+  if (!stored) return "";
+  if (!isV2EncryptedText(stored)) throw new Error("任务内容格式无效，请重新登录后再试");
   try {
-    const prefix = stored.startsWith(ENCRYPTION_PREFIX_V2) ? ENCRYPTION_PREFIX_V2 : ENCRYPTION_PREFIX;
-    const packed = base64ToBytes(stored.slice(prefix.length));
+    const packed = base64ToBytes(stored.slice(ENCRYPTION_PREFIX_V2.length));
+    if (packed.length < 29) throw new Error("invalid ciphertext");
     const decrypted = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: packed.slice(0, 12) },
-      await (prefix === ENCRYPTION_PREFIX_V2 ? encryptionKeyForV2(identity) : encryptionKeyFor(identity)),
+      await encryptionKeyForV2(identity),
       packed.slice(12),
     );
     return new TextDecoder().decode(decrypted);
@@ -393,15 +403,11 @@ async function encryptTaskContent(task, identity = state.encryptionSeed) {
 }
 
 async function decryptTaskContent(task, identity = state.encryptionSeed) {
-  const encryptedTitle = String(task.title || "");
-  const encryptedDetails = String(task.details || "");
-  const contentEncrypted = isEncryptedText(encryptedTitle) && (!encryptedDetails || isEncryptedText(encryptedDetails));
-  const contentV1 = encryptedTitle.startsWith(ENCRYPTION_PREFIX) || encryptedDetails.startsWith(ENCRYPTION_PREFIX);
   const [title, details] = await Promise.all([
     decryptText(task.title, identity),
     decryptText(task.details || "", identity),
   ]);
-  return { ...task, title, details, _contentEncrypted: contentEncrypted, _contentV1: contentV1 };
+  return { ...task, title, details };
 }
 
 async function decryptApiPayload(payload) {
@@ -498,25 +504,27 @@ function reminderPicker() {
 async function api(path, options = {}) {
   const { decrypt = true, timeoutMs = 0, ...fetchOptions } = options;
   const controller = timeoutMs ? new AbortController() : null;
-  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : 0;
-  let response;
-  try {
-    response = await fetch(path, {
+  const operation = (async () => {
+    const response = await fetch(path, {
       ...fetchOptions,
       signal: controller?.signal || fetchOptions.signal,
       headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     });
+    const payload = await response.json();
+    if (!response.ok) {
+      const error = new Error(payload.error || "操作未完成");
+      error.status = response.status;
+      error.code = payload.code || "";
+      throw error;
+    }
+    return decrypt ? decryptApiPayload(payload) : payload;
+  })();
+  if (!timeoutMs) return operation;
+  try {
+    return await withTimeout(operation, timeoutMs, "网络请求超时，请稍后重试");
   } finally {
-    if (timeout) clearTimeout(timeout);
+    controller.abort();
   }
-  const payload = await response.json();
-  if (!response.ok) {
-    const error = new Error(payload.error || "操作未完成");
-    error.status = response.status;
-    error.code = payload.code || "";
-    throw error;
-  }
-  return decrypt ? decryptApiPayload(payload) : payload;
 }
 
 let lastReminderCheckAt = 0;
@@ -731,6 +739,8 @@ function dueReminderBanner() {
 async function enterAccount(account) {
   const seed = String(account.encryptionSeed || "");
   if (!/^u_[A-Za-z0-9_-]{43}$/.test(seed)) throw new Error("账号身份信息无效，请重新登录");
+  foregroundSyncEpoch += 1;
+  taskStateRevision += 1;
   const keepOfflineData = localProfile?.username === account.username && localProfile?.encryptionSeed === seed;
   state.identity = "authenticated";
   state.username = account.username;
@@ -741,8 +751,6 @@ async function enterAccount(account) {
   state.taskSortMode = normalizeTaskSortMode(account.taskSortMode);
   state.sortModeSaving = false;
   state.sortModeError = "";
-  encryptionKeyIdentity = "";
-  encryptionKeyPromise = null;
   encryptionKeyV2Identity = "";
   encryptionKeyV2Promise = null;
   state.authPromptOpen = false;
@@ -943,6 +951,8 @@ async function submitAuthentication() {
 
 function handleAuthenticationError(error) {
   if (error.status !== 401 && error.status !== 403) return false;
+  foregroundSyncEpoch += 1;
+  taskStateRevision += 1;
   state.authUsername = state.username || state.authUsername;
   state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.themeColor = "violet"; state.themeSaving = false; state.themeError = ""; state.taskSortMode = "manual"; state.sortModeSaving = false; state.sortModeError = ""; state.tasks = [];
   state.authPassword = ""; state.authConfirm = ""; state.authResetCode = "";
@@ -1079,6 +1089,35 @@ function scheduleOutboxSync(delay = 0) {
   }, delay);
 }
 
+function taskPayloadFromLocalSnapshot(task) {
+  const reminder = task.reminder?.remindAt
+    ? { reminderAt: task.reminder.remindAt, repeatRule: task.reminder.repeatRule, tz: task.reminder.tz }
+    : { reminderAt: null };
+  return {
+    title: task.title,
+    details: task.details || "",
+    color: task.color,
+    tags: Array.isArray(task.tags) ? task.tags : [],
+    status: task.status || "none",
+    dueDate: task.due_date || null,
+    pinned: Boolean(task.pinned),
+    ...reminder,
+  };
+}
+
+function isStrictV2TaskPayload(task) {
+  return Boolean(task && isV2EncryptedText(task.title) && (!task.details || isV2EncryptedText(task.details)));
+}
+
+async function encryptedPayloadForOutboxEntry(entry) {
+  const localId = Number(entry.payload.localId);
+  const resolvedId = resolvedTaskId(localId);
+  const localTask = state.tasks.find((task) => Number(task.id) === localId || Number(task.id) === resolvedId);
+  if (localTask) return encryptTaskContent(taskPayloadFromLocalSnapshot(localTask));
+  if (isStrictV2TaskPayload(entry.payload.task)) return entry.payload.task;
+  throw new Error("本地待同步事项内容无法恢复，请重新编辑后再试");
+}
+
 async function sendOutboxEntry(entry, { timeoutMs = 0 } = {}) {
   const requestOptions = timeoutMs ? { timeoutMs } : {};
   const localId = Number(entry.payload.localId);
@@ -1088,12 +1127,14 @@ async function sendOutboxEntry(entry, { timeoutMs = 0 } = {}) {
   // here, leaving it at the head of the outbox forever.
   if (entry.kind !== "create" && entry.kind !== "reorder" && (!resolvedId || resolvedId < 0)) return false;
   if (entry.kind === "create") {
-    const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(entry.payload.task), headers: { "X-RabbitTodo-Mutation": entry.id }, ...requestOptions });
+    const task = await encryptedPayloadForOutboxEntry(entry);
+    const response = await api("/api/tasks", { method: "POST", body: JSON.stringify(task), headers: { "X-RabbitTodo-Mutation": entry.id }, ...requestOptions });
     applyServerTask(response.task, localId, false);
     return true;
   }
   if (entry.kind === "update") {
-    const response = await api(`/api/tasks/${resolvedId}`, { method: "PUT", body: JSON.stringify(entry.payload.task), ...requestOptions });
+    const task = await encryptedPayloadForOutboxEntry(entry);
+    const response = await api(`/api/tasks/${resolvedId}`, { method: "PUT", body: JSON.stringify(task), ...requestOptions });
     applyServerTask(response.task, localId, false);
     return true;
   }
@@ -1188,15 +1229,9 @@ async function flushOutbox() {
   return outboxSyncPromise;
 }
 
-async function flushOutboxAndLoad() {
+async function flushOutboxAndLoad(syncEpoch = foregroundSyncEpoch) {
   await flushOutbox();
-  if (!state.updateApplying) await loadTasks({ quiet: true });
-}
-
-// Legacy plaintext re-encryption remains best-effort and does not enter the task outbox.
-function saveInBackground(operation) {
-  mutationChain = mutationChain.then(operation, operation).catch(() => {});
-  return mutationChain;
+  if (!state.updateApplying) await loadTasks({ quiet: true, syncEpoch });
 }
 
 function resolvedTaskId(id) {
@@ -1240,58 +1275,37 @@ function mergeRemoteTasks(remoteTasks) {
   return [...merged.values()];
 }
 
-function migrateLegacyTaskContent(tasks) {
-  if (!tasks.length) return;
-  tasks.forEach((task) => { task._contentEncrypted = true; });
-  saveInBackground(async () => {
-    const encryptedTasks = await Promise.all(tasks.map(async (task) => {
-      const encrypted = await encryptTaskContent(task);
-      return { id: resolvedTaskId(task.id), title: encrypted.title, details: encrypted.details };
-    }));
-    for (let offset = 0; offset < encryptedTasks.length; offset += 50) {
-      await api("/api/tasks/encrypt", {
-        method: "POST",
-        body: JSON.stringify({ tasks: encryptedTasks.slice(offset, offset + 50) }),
-      });
-    }
-  });
-}
 
-// rtenc:v1 → rtenc:v2 后台迁移；与明文加密同样走 saveInBackground（best-effort，不进 outbox）。
-function migrateV1TaskContent(tasks) {
-  if (!tasks.length) return;
-  tasks.forEach((task) => { task._contentV1 = false; });
-  saveInBackground(async () => {
-    const encryptedTasks = await Promise.all(tasks.map(async (task) => {
-      const encrypted = await encryptTaskContent(task);
-      return { id: resolvedTaskId(task.id), title: encrypted.title, details: encrypted.details };
-    }));
-    for (let offset = 0; offset < encryptedTasks.length; offset += 50) {
-      await api("/api/tasks/encrypt", {
-        method: "POST",
-        body: JSON.stringify({ tasks: encryptedTasks.slice(offset, offset + 50) }),
-      });
-    }
-  });
-}
-
-async function loadTasks({ quiet = false } = {}) {
+async function loadTasks({ quiet = false, syncEpoch = foregroundSyncEpoch } = {}) {
   if (!state.identity) return render();
   if (taskSyncPromise) return taskSyncPromise;
-  taskSyncPromise = (async () => {
+  const expectedSeed = state.encryptionSeed;
+  const expectedRevision = taskStateRevision;
+  const syncPromise = (async () => {
+    let applied = false;
     try {
-      state.tasks = mergeRemoteTasks((await api("/api/tasks")).tasks);
-      migrateLegacyTaskContent(state.tasks.filter((task) => task.id > 0 && !task._contentEncrypted));
-      migrateV1TaskContent(state.tasks.filter((task) => task.id > 0 && task._contentV1));
+      const remoteTasks = (await api("/api/tasks", { timeoutMs: SYNC_REQUEST_TIMEOUT })).tasks;
+      if (syncEpoch !== foregroundSyncEpoch || expectedSeed !== state.encryptionSeed || expectedRevision !== taskStateRevision) {
+        scheduleOutboxSync(500);
+        return false;
+      }
+      state.tasks = mergeRemoteTasks(remoteTasks);
       lastTaskSyncAt = Date.now();
       await persistLocalSnapshot();
+      if (!outbox().length && ["syncing", "failed"].includes(state.syncStatus)) setSyncStatus("success");
+      applied = true;
     } catch (error) {
-      if (!handleAuthenticationError(error) && !quiet && !isReloadingForServiceWorker) alert(error.message);
+      if (!handleAuthenticationError(error)) {
+        setSyncStatus("failed", `读取任务失败：${error.message || "网络不可用"}`);
+        if (!quiet && !isReloadingForServiceWorker) alert(error.message);
+      }
     } finally {
-      taskSyncPromise = null;
+      if (taskSyncPromise === syncPromise) taskSyncPromise = null;
     }
     render();
+    return applied;
   })();
+  taskSyncPromise = syncPromise;
   return taskSyncPromise;
 }
 
@@ -1427,11 +1441,11 @@ function taskLists(tasks) {
 
 function syncNotice() {
   const count = queuedTaskCount();
-  if (!count && state.syncStatus !== "success") return "";
-  const prefix = `${count || state.syncCount} 条事项`;
+  if (!count && !["success", "failed"].includes(state.syncStatus)) return "";
+  const prefix = count || state.syncCount ? `${count || state.syncCount} 条事项` : "";
   if (state.syncStatus === "syncing") return `<p class="sync-notice is-syncing" role="status">${prefix}同步中…</p>`;
   if (state.syncStatus === "success") return `<p class="sync-notice is-success" role="status">${prefix}同步成功</p>`;
-  if (state.syncStatus === "failed") return `<button class="sync-notice is-failed" type="button" data-action="sync-now" title="${escapeHtml(state.syncError)}">${prefix}同步失败，点击立即重试</button>`;
+  if (state.syncStatus === "failed") return `<button class="sync-notice is-failed" type="button" data-action="sync-now">${prefix}${escapeHtml(state.syncError || "同步失败")}，点击重试</button>`;
   return `<button class="sync-notice" type="button" data-action="sync-now">${prefix}尚未同步，点击立即同步，或等待系统自动同步。</button>`;
 }
 
@@ -1524,13 +1538,6 @@ function taskScrollContainer() {
   return app.querySelector(".content-scroll");
 }
 
-function updateTaskHeaderCompaction() {
-  const workspace = app.querySelector(".workspace");
-  const scroller = taskScrollContainer();
-  if (!workspace || !scroller) return;
-  workspace.classList.toggle("is-header-condensed", matchMedia("(orientation: portrait)").matches && scroller.scrollTop > 12);
-}
-
 function captureTaskScroll() {
   const workspace = app.querySelector(".workspace");
   if (!workspace
@@ -1597,9 +1604,6 @@ function render() {
   if (persistentIdentitySymbol && nextIdentitySymbol && persistentIdentitySymbol !== nextIdentitySymbol) nextIdentitySymbol.replaceWith(persistentIdentitySymbol);
   else if (nextIdentitySymbol) persistentIdentitySymbol = nextIdentitySymbol;
   restoreTaskScroll(scrollSnapshot);
-  const taskScroller = taskScrollContainer();
-  taskScroller?.addEventListener("scroll", updateTaskHeaderCompaction, { passive: true });
-  updateTaskHeaderCompaction();
 }
 
 function openEditor(task = { title: "", details: "", color: state.themeColor, status: "none", tags: [], due_date: "", pinned: false, pinned_at: null, reminder: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned), reminder: task.reminder || null }; state.datePicker = null; state.reminderPicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
@@ -1758,6 +1762,7 @@ function persistDraggedOrder() {
     pinnedIds: merged.filter((task) => task.pinned).map((task) => task.id),
     completed: state.view === "done",
   };
+  taskStateRevision += 1;
   render();
   // A normal drag is an immediate write. Only a real transport failure leaves
   // this order in the outbox and shows the pending-sync notice.
@@ -1870,8 +1875,10 @@ app.addEventListener("click", async (event) => {
       try { await api("/api/auth/logout", { method: "POST", body: "{}" }); } catch {}
       state.authUsername = state.username;
       await localClear().catch(() => {});
+      foregroundSyncEpoch += 1;
+      taskStateRevision += 1;
       localProfile = null; taskIdAliases.clear(); nextTemporaryTaskId = -1;
-      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.themeColor = "violet"; state.themeSaving = false; state.themeError = ""; state.taskSortMode = "manual"; state.sortModeSaving = false; state.sortModeError = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; state.pushStatus = null; state.dueReminders = []; encryptionKeyIdentity = ""; encryptionKeyPromise = null; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null; return render();
+      state.identity = ""; state.username = ""; state.encryptionSeed = ""; state.themeColor = "violet"; state.themeSaving = false; state.themeError = ""; state.taskSortMode = "manual"; state.sortModeSaving = false; state.sortModeError = ""; state.tasks = []; state.view = "todo"; state.authMode = "login"; state.authPromptOpen = true; state.authDirty = false; state.authError = ""; state.authPassword = ""; state.authConfirm = ""; state.authResetCode = ""; state.passwordDialog = false; state.pushStatus = null; state.dueReminders = []; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null; return render();
     }
     if (action === "enable-notifications") { await requestNotificationPermission(); await refreshPushStatus(); return render(); }
     if (action === "send-test-push") {
@@ -1949,6 +1956,7 @@ app.addEventListener("click", async (event) => {
       task.completed_at = completed ? new Date().toISOString() : null;
       task.manual_position = null;
       if (completed) task.status = "none";
+      taskStateRevision += 1;
       render();
       await persistLocalSnapshot();
       publishTaskMutation("toggle", { localId: id, completed }).catch((error) => alert(error.message));
@@ -1959,6 +1967,7 @@ app.addEventListener("click", async (event) => {
       const id = Number(state.editor.id);
       state.tasks = state.tasks.filter((task) => task.id !== id);
       state.editor = null;
+      taskStateRevision += 1;
       render();
       await persistLocalSnapshot();
       publishTaskMutation("delete", { localId: id }).catch((error) => alert(error.message));
@@ -2035,6 +2044,7 @@ app.addEventListener("submit", async (event) => {
           Object.assign(localTask, { title, details, color: payload.color, status: payload.status, tags, due_date: dueDate, pinned: payload.pinned, pinned_at: pinnedAt, reminder: state.editor.reminder || null });
         }
         state.editor = null;
+        taskStateRevision += 1;
         render();
         const encryptedPayload = await encryptTaskContent(payload);
         try {
@@ -2043,6 +2053,7 @@ app.addEventListener("submit", async (event) => {
           if (previousTask && state.identity) {
             const index = state.tasks.findIndex((task) => task.id === editingId);
             if (index >= 0) state.tasks[index] = previousTask;
+            taskStateRevision += 1;
             render();
           }
           throw error;
@@ -2057,6 +2068,7 @@ app.addEventListener("submit", async (event) => {
         });
         state.editor = null;
         state.view = "todo";
+        taskStateRevision += 1;
         render();
         const encryptedPayload = await encryptTaskContent(payload);
         try {
@@ -2064,6 +2076,7 @@ app.addEventListener("submit", async (event) => {
         } catch (error) {
           if (state.identity) {
             state.tasks = state.tasks.filter((task) => task.id !== temporaryId);
+            taskStateRevision += 1;
             render();
           }
           throw error;
@@ -2100,10 +2113,10 @@ async function restoreSession() {
   const rememberedUsername = state.username || localProfile?.username || "";
   if (!rememberedUsername) return render();
   try {
-    const response = await api("/api/auth/session");
+    const response = await api("/api/auth/session", { decrypt: false, timeoutMs: SYNC_REQUEST_TIMEOUT });
     if (!response.account || response.account.username !== rememberedUsername) throw new Error("会话不匹配");
     state.identity = "authenticated"; state.username = response.account.username; state.encryptionSeed = response.account.encryptionSeed || state.encryptionSeed; state.themeColor = normalizeThemeColor(response.account.themeColor); state.taskSortMode = normalizeTaskSortMode(response.account.taskSortMode); state.authPromptOpen = false;
-    encryptionKeyIdentity = ""; encryptionKeyPromise = null; encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null;
+    encryptionKeyV2Identity = ""; encryptionKeyV2Promise = null;
     lastSessionLeaseAt = Date.now();
     await persistLocalSnapshot();
     if (serviceWorkerRegistration) await synchronizeForeground(); else await flushOutboxAndLoad();
@@ -2111,17 +2124,34 @@ async function restoreSession() {
     await refreshPushStatus();
   } catch (error) {
     if (error.status === 401 || error.status === 403) handleAuthenticationError(error);
-    else if (!state.tasks.length) render();
+    else {
+      setSyncStatus("failed", `会话恢复失败：${error.message || "网络不可用"}`);
+      render();
+      scheduleOutboxSync(SYNC_RETRY_DELAYS[Math.min(outboxRetryAttempt++, SYNC_RETRY_DELAYS.length - 1)]);
+    }
   }
 }
 
 async function bootstrapAfterServiceWorker() {
-  checkForServiceWorkerUpdate({ force: true });
-  await restoreSession();
+  await synchronizeForeground();
+  if (!state.identity) return render();
+  await subscribeIfPermitted();
+  await refreshPushStatus();
+}
+
+let serviceWorkerBootstrapStarted = false;
+
+function adoptServiceWorkerRegistration(registration) {
+  if (serviceWorkerBootstrapStarted) return;
+  serviceWorkerBootstrapStarted = true;
+  serviceWorkerRegistration = registration;
+  watchServiceWorkerInstallation(registration);
+  bootstrapAfterServiceWorker();
 }
 
 async function bootstrap() {
-  await restoreLocalSnapshot();
+  const restored = await restoreLocalSnapshot();
+  if (!restored) render();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("message", (event) => {
       if (event.data?.type === "RABBITTODO_SW_VERSION") handleServiceWorkerVersion(event.data.version);
@@ -2130,11 +2160,9 @@ async function bootstrap() {
       if (state.updateApplying) reloadForServiceWorkerUpdate();
       else probeServiceWorkerVersion();
     });
-    navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).then((registration) => {
-      serviceWorkerRegistration = registration;
-      watchServiceWorkerInstallation(registration);
-      bootstrapAfterServiceWorker();
-    }).catch(() => restoreSession());
+    const registrationAttempt = navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" });
+    registrationAttempt.then(adoptServiceWorkerRegistration).catch(() => {});
+    withTimeout(registrationAttempt, SERVICE_WORKER_UPDATE_TIMEOUT, "Service Worker 注册超时").catch(() => restoreSession());
   } else {
     restoreSession();
   }

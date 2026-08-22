@@ -1228,14 +1228,6 @@ body.is-task-dragging {
   }
 
   :root .content-scroll-tasks .workspace-overview .topbar h1 {
-    transition: font-size .18s ease, line-height .18s ease;
-  }
-
-  :root .content-scroll-tasks .workspace.is-header-condensed .workspace-overview .topbar {
-    align-items: flex-end;
-  }
-
-  :root .content-scroll-tasks .workspace.is-header-condensed .workspace-overview .topbar h1 {
     font-size: 24px;
     line-height: 1;
   }

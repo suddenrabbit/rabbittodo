@@ -1,19 +1,15 @@
 const COLORS = new Set(["violet", "mint", "orange", "blue", "rose"]);
 const STATUSES = new Set(["none", "in_progress", "paused"]);
 const USERNAME_PATTERN = /^[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_]{1,9}$/u;
-const ENCRYPTION_PREFIX = "rtenc:v1:";
 const ENCRYPTION_PREFIX_V2 = "rtenc:v2:";
-const ENCRYPTED_VALUE_PATTERN = /^rtenc:(v1|v2):[A-Za-z0-9+/]+={0,2}$/;
+const ENCRYPTED_VALUE_PATTERN = /^rtenc:v2:[A-Za-z0-9+/]+={0,2}$/;
 const ENCRYPTION_SALT_V2 = "RabbitToDo task content v2";
 const ENCRYPTION_INFO_V2 = "task-content";
-const INTERNAL_IDENTITY_PATTERN = /^u_[A-Za-z0-9_-]{43}$/;
 // Cloudflare Workers rejects PBKDF2 iteration counts above 100,000.
 const PASSWORD_ITERATIONS = 100_000;
 const PASSWORD_VERSION = "pbkdf2-sha256-v1";
 const SESSION_DAYS = 180;
 const RESET_MINUTES = 15;
-// Keep the final upgrade invocation within D1 Free's 50-query limit.
-const MAX_UPGRADE_TASKS = 40;
 const DEFAULT_ADMIN_SALT = "RabbitToDo admin fallback v1";
 const DEFAULT_ADMIN_HASH = "CKOSDMM91UVxeB5EUIv4UPUGwJpZlYnKi5CPg4dkQjc=";
 const authFailures = new Map();
@@ -54,11 +50,9 @@ function themeColor(value) { return COLORS.has(String(value || "")) ? String(val
 function taskSortMode(value) { return value === "auto" ? "auto" : "manual"; }
 function publicAccount(row, includeSeed = true) { return { username: row.username, themeColor: themeColor(row.theme_color), taskSortMode: taskSortMode(row.task_sort_mode), ...(includeSeed ? { encryptionSeed: row.code } : {}) }; }
 function taskFromRow(row) { if (!row) return null; const { identity_code, reminder_at, reminder_tz, reminder_repeat_rule, reminder_enabled, ...task } = row; let tags = []; try { tags = JSON.parse(task.tags || "[]"); } catch {} return { ...task, completed: Boolean(task.completed), pinned: Boolean(task.pinned), tags, details: task.details || "", status: task.status || "none", reminder: reminderPublic({ reminder_at, reminder_tz, reminder_repeat_rule, reminder_enabled }) }; }
-function isEncryptedValue(value) { const raw = String(value || ""); return raw.startsWith(ENCRYPTION_PREFIX) || raw.startsWith(ENCRYPTION_PREFIX_V2); }
-function sanitizeTaskText(value, { field, plainLimit, encryptedLimit, required = false }) { const raw = String(value || "").trim(); if (!raw) { if (required) throw new Error(`请填写${field}`); return ""; } if (isEncryptedValue(raw)) { if (!ENCRYPTED_VALUE_PATTERN.test(raw) || raw.length > encryptedLimit) throw new Error(`${field}密文无效`); return raw; } return raw.slice(0, plainLimit); }
-function sanitizeTask(input) { const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 200, encryptedLimit: 4096, required: true }); const color = COLORS.has(input.color) ? input.color : "violet"; const tags = Array.isArray(input.tags) ? [...new Set(input.tags.map((tag) => String(tag).trim().replace(/^#/, "")).filter(Boolean))].slice(0, 12) : []; const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 2000, encryptedLimit: 16000 }); const status = STATUSES.has(input.status) ? input.status : "none"; const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.dueDate || "")) ? input.dueDate : null; return { title, color, tags, details, status, dueDate, pinned: Boolean(input.pinned) }; }
-function sanitizeEncryptedTaskContent(input) { const id = Number(input.id); if (!Number.isInteger(id) || id <= 0) throw new Error("事项编号无效"); const title = sanitizeTaskText(input.title, { field: "事项名称", plainLimit: 0, encryptedLimit: 4096, required: true }); const details = sanitizeTaskText(input.details, { field: "任务详情", plainLimit: 0, encryptedLimit: 16000 }); if (!isEncryptedValue(title) || (details && !isEncryptedValue(details))) throw new Error("任务密文无效"); return { id, title, details }; }
-function sanitizeUpgradeTask(input) { const task = sanitizeEncryptedTaskContent(input); const updatedAt = String(input.updatedAt || ""); if (!updatedAt || updatedAt.length > 64) throw new Error("任务版本信息无效"); return { ...task, updatedAt }; }
+function validEncryptedTaskText(value) { try { return ENCRYPTED_VALUE_PATTERN.test(value) && b64urlDecode(value.slice(ENCRYPTION_PREFIX_V2.length)).length >= 29; } catch { return false; } }
+function sanitizeTaskText(value, { field, encryptedLimit, required = false }) { const raw = String(value || "").trim(); if (!raw) { if (required) throw new Error(`请填写${field}`); return ""; } if (raw.length > encryptedLimit || !validEncryptedTaskText(raw)) throw new Error(`${field}必须使用 rtenc:v2 加密`); return raw; }
+function sanitizeTask(input) { const title = sanitizeTaskText(input.title, { field: "事项名称", encryptedLimit: 4096, required: true }); const color = COLORS.has(input.color) ? input.color : "violet"; const tags = Array.isArray(input.tags) ? [...new Set(input.tags.map((tag) => String(tag).trim().replace(/^#/, "")).filter(Boolean))].slice(0, 12) : []; const details = sanitizeTaskText(input.details, { field: "任务详情", encryptedLimit: 16000 }); const status = STATUSES.has(input.status) ? input.status : "none"; const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.dueDate || "")) ? input.dueDate : null; return { title, color, tags, details, status, dueDate, pinned: Boolean(input.pinned) }; }
 function taskIdFrom(pathname) { return Number(pathname.match(/^\/api\/tasks\/(\d+)$/)?.[1] || 0) || null; }
 async function taskById(db, id, identity) { return taskFromRow(await db.prepare("SELECT t.*, r.remind_at AS reminder_at, r.tz AS reminder_tz, r.repeat_rule AS reminder_repeat_rule, r.enabled AS reminder_enabled FROM tasks t LEFT JOIN task_reminders r ON r.task_id = t.id AND r.identity_code = t.identity_code WHERE t.id = ? AND t.identity_code = ?").bind(id, identity).first()); }
 
@@ -226,7 +220,7 @@ async function upsertReminder(db, identity, taskId, reminder) {
   await db.prepare("INSERT INTO task_reminders (reminder_id, identity_code, task_id, remind_at, tz, repeat_rule, next_fire_at, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, 1)").bind(reminderId, identity, taskId, reminder.remindAt, reminder.tz, JSON.stringify(reminder.repeatRule), next || new Date().toISOString()).run();
 }
 
-// 推送瞬间临时解密 rtenc:v2 标题；v1（PBKDF2 120k 超出 Worker 上限）或非密文一律回退通用文案。
+// 推送瞬间临时解密 rtenc:v2 标题；格式或解密异常时回退通用文案。
 async function decryptTaskTitle(title, identityCode) {
   const stored = String(title || "");
   if (!stored.startsWith(ENCRYPTION_PREFIX_V2)) return null;
@@ -282,7 +276,6 @@ async function authApi(request, env, url) {
     await db.prepare("UPDATE sessions SET expires_at = ? WHERE token_hash = ?").bind(expiry(), await sha256(token)).run();
     return json({ account: publicAccount(account) }, 200, { "Set-Cookie": sessionCookie(token, request) });
   }
-  if (pathname === "/api/auth/upgrade/prepare" || pathname === "/api/auth/upgrade") return json({ error: "旧身份码升级入口已关闭，请使用用户名和密码登录" }, 410);
   if (request.method === "POST" && pathname === "/api/auth/register") {
     const { username, password } = await bodyFrom(request); const display = String(username || "").normalize("NFKC").trim(); const normalized = normalizeUsername(display);
     if (!validUsername(display)) return json({ error: "用户名为 2-10 个字符，须以中文或英文开头" }, 400);
@@ -291,7 +284,7 @@ async function authApi(request, env, url) {
     const record = await passwordRecord(password); let code = "";
     for (let attempts = 0; attempts < 10 && !code; attempts += 1) {
       const candidate = randomIdentityCode();
-      try { await db.prepare("INSERT INTO identities (code, status, username, username_normalized, password_hash, password_salt, password_params, upgraded_at) VALUES (?, 'enabled', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)").bind(candidate, display, normalized, record.hash, record.salt, record.params).run(); code = candidate; }
+      try { await db.prepare("INSERT INTO identities (code, status, username, username_normalized, password_hash, password_salt, password_params) VALUES (?, 'enabled', ?, ?, ?, ?, ?)").bind(candidate, display, normalized, record.hash, record.salt, record.params).run(); code = candidate; }
       catch (error) { const message = String(error); if (message.includes("identities.username_normalized")) return json({ error: "用户名已存在，请直接登录" }, 409); if (!message.includes("identities.code")) throw error; }
     }
     if (!code) return json({ error: "创建账号失败，请重试" }, 503);
@@ -319,49 +312,6 @@ async function authApi(request, env, url) {
     const next = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(account.code).first();
     return json({ account: publicAccount(next) });
   }
-  if (request.method === "POST" && pathname === "/api/auth/upgrade/prepare") {
-    const { identityCode, username } = await bodyFrom(request); const display = String(username || "").normalize("NFKC").trim(); const normalized = normalizeUsername(display);
-    if (!/^\d{6}$/.test(String(identityCode || ""))) return json({ error: "请输入 6 位旧身份码" }, 400);
-    if (!validUsername(display)) return json({ error: "用户名为 2-10 个字符，须以中文或英文开头" }, 400);
-    const legacy = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(identityCode).first(); if (!legacy) return json({ error: "没有找到这个身份码，请检查后重试" }, 404); if (legacy.username) return json({ error: "这个账号已经设置过用户名，请直接登录" }, 409); if (legacy.status === "disabled") return json({ error: "账号已禁用" }, 403);
-    if (await db.prepare("SELECT code FROM identities WHERE username_normalized = ?").bind(normalized).first()) return json({ error: "用户名已存在" }, 409);
-    const { results } = await db.prepare("SELECT * FROM tasks WHERE identity_code = ? ORDER BY id").bind(identityCode).all();
-    if (results.length > MAX_UPGRADE_TASKS) return json({ error: "待办数量较多，暂时无法自动升级，请联系管理员" }, 409);
-    let newIdentityCode = ""; for (let attempts = 0; attempts < 10 && !newIdentityCode; attempts += 1) { const candidate = randomIdentityCode(); if (!await db.prepare("SELECT code FROM identities WHERE code = ?").bind(candidate).first()) newIdentityCode = candidate; }
-    if (!newIdentityCode) return json({ error: "暂时无法生成新账号，请重试" }, 503);
-    return json({ newIdentityCode, tasks: results.map(taskFromRow) });
-  }
-  if (request.method === "POST" && pathname === "/api/auth/upgrade") {
-    const { identityCode, newIdentityCode, username, password, tasks } = await bodyFrom(request); const display = String(username || "").normalize("NFKC").trim(); const normalized = normalizeUsername(display);
-    if (!/^\d{6}$/.test(String(identityCode || ""))) return json({ error: "请输入 6 位旧身份码" }, 400);
-    if (!INTERNAL_IDENTITY_PATTERN.test(String(newIdentityCode || ""))) return json({ error: "新身份信息无效，请重新升级" }, 400);
-    const legacy = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(identityCode).first(); if (!legacy) return json({ error: "没有找到这个身份码，请检查后重试" }, 404); if (legacy.username) return json({ error: "这个账号已经设置过用户名，请直接登录" }, 409); if (legacy.status === "disabled") return json({ error: "账号已禁用" }, 403);
-    if (!validUsername(display)) return json({ error: "用户名为 2-10 个字符，须以中文或英文开头" }, 400);
-    if (!validPassword(password)) return json({ error: "密码至少 8 位" }, 400);
-    if (await db.prepare("SELECT code FROM identities WHERE username_normalized = ?").bind(normalized).first()) return json({ error: "用户名已存在" }, 409);
-    if (!Array.isArray(tasks) || tasks.length > MAX_UPGRADE_TASKS) return json({ error: "任务迁移数据无效" }, 400);
-    const migrated = tasks.map(sanitizeUpgradeTask); if (new Set(migrated.map((task) => task.id)).size !== migrated.length) return json({ error: "任务迁移数据重复" }, 400);
-    const { results: currentTasks } = await db.prepare("SELECT id, updated_at FROM tasks WHERE identity_code = ? ORDER BY id").bind(identityCode).all();
-    const submitted = new Map(migrated.map((task) => [task.id, task]));
-    if (currentTasks.length !== migrated.length || currentTasks.some((task) => submitted.get(Number(task.id))?.updatedAt !== String(task.updated_at))) return json({ error: "待办在升级期间发生变化，请重新操作" }, 409);
-    if (await db.prepare("SELECT code FROM identities WHERE code = ?").bind(newIdentityCode).first()) return json({ error: "新身份码发生冲突，请重新操作", code: "identity_conflict" }, 409);
-    const record = await passwordRecord(password); const token = randomB64(32); const tokenHash = await sha256(token);
-    try {
-      const statements = [
-        db.prepare("INSERT INTO identities (code, created_at, status, reviewed_at, username, username_normalized, password_hash, password_salt, password_params, upgraded_at) SELECT ?, created_at, 'enabled', reviewed_at, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP FROM identities WHERE code = ? AND username IS NULL AND status != 'disabled'").bind(newIdentityCode, display, normalized, record.hash, record.salt, record.params, identityCode),
-        ...migrated.map((task) => db.prepare("UPDATE tasks SET identity_code = ?, title = ?, details = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ? AND updated_at = ?").bind(newIdentityCode, task.title, task.details, task.id, identityCode, task.updatedAt)),
-        db.prepare("DELETE FROM sessions WHERE identity_code = ?").bind(identityCode),
-        db.prepare("DELETE FROM password_reset_codes WHERE identity_code = ?").bind(identityCode),
-        db.prepare("DELETE FROM identities WHERE code = ? AND username IS NULL AND status != 'disabled'").bind(identityCode),
-        db.prepare("INSERT INTO sessions (token_hash, identity_code, expires_at) VALUES (?, ?, ?)").bind(tokenHash, newIdentityCode, expiry()),
-      ];
-      await db.batch(statements);
-    } catch (error) {
-      const message = String(error); if (message.includes("identities.username_normalized")) return json({ error: "用户名已存在" }, 409); if (message.includes("identities.code")) return json({ error: "新身份码发生冲突，请重新操作", code: "identity_conflict" }, 409); if (message.includes("FOREIGN KEY")) return json({ error: "待办在升级期间发生变化，请重新操作" }, 409);
-      throw error;
-    }
-    const account = await db.prepare("SELECT * FROM identities WHERE code = ?").bind(newIdentityCode).first(); return json({ account: publicAccount(account) }, 200, { "Set-Cookie": sessionCookie(token, request) });
-  }
   if (request.method === "POST" && pathname === "/api/auth/password") {
     const account = await accountFromSession(request, db); if (!account) return json({ error: "请登录" }, 401); const { currentPassword, newPassword } = await bodyFrom(request);
     if (!await passwordMatches(String(currentPassword || ""), account)) return json({ error: "当前密码错误" }, 401); if (!validPassword(newPassword)) return json({ error: "新密码至少 8 位" }, 400);
@@ -382,9 +332,9 @@ async function authApi(request, env, url) {
 
 async function adminApi(request, env, pathname) {
   if (!await adminAuthorized(request, env)) return json({ error: "管理员身份验证失败" }, 401); const db = env.DB;
-  if (request.method === "GET" && pathname === "/api/admin/users") { const { results } = await db.prepare("SELECT identities.code, identities.username, identities.status, identities.created_at, identities.upgraded_at, COUNT(tasks.id) AS task_count FROM identities LEFT JOIN tasks ON tasks.identity_code = identities.code GROUP BY identities.code ORDER BY identities.created_at DESC").all(); return json({ users: results.map((row) => ({ ...row, task_count: Number(row.task_count || 0), legacy: !row.username })) }); }
+  if (request.method === "GET" && pathname === "/api/admin/users") { const { results } = await db.prepare("SELECT identities.code, identities.username, identities.status, identities.created_at, COUNT(tasks.id) AS task_count FROM identities LEFT JOIN tasks ON tasks.identity_code = identities.code GROUP BY identities.code ORDER BY identities.created_at DESC").all(); return json({ users: results.map((row) => ({ ...row, task_count: Number(row.task_count || 0) })) }); }
   const match = pathname.match(/^\/api\/admin\/users\/([^/]+)(?:\/(reset))?$/); if (match && request.method === "PATCH" && !match[2]) { const { status } = await bodyFrom(request); if (!new Set(["enabled", "disabled"]).has(status)) return json({ error: "账号状态无效" }, 400); const result = await db.prepare("UPDATE identities SET status = ?, reviewed_at = CURRENT_TIMESTAMP WHERE code = ?").bind(status, match[1]).run(); if (!result.meta.changes) return json({ error: "用户不存在" }, 404); if (status === "disabled") await revokeSessions(db, match[1]); return json({ ok: true }); }
-  if (match && match[2] && request.method === "POST") { const user = await db.prepare("SELECT username FROM identities WHERE code = ?").bind(match[1]).first(); if (!user?.username) return json({ error: "旧身份码尚未升级，无法重置密码" }, 400); await db.prepare("DELETE FROM password_reset_codes WHERE identity_code = ?").bind(match[1]).run(); const code = randomB64(24).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); await db.prepare("INSERT INTO password_reset_codes (code_hash, identity_code, expires_at) VALUES (?, ?, ?)").bind(await sha256(code), match[1], new Date(Date.now() + RESET_MINUTES * 60_000).toISOString()).run(); await revokeSessions(db, match[1]); return json({ resetCode: code, expiresInMinutes: RESET_MINUTES }); }
+  if (match && match[2] && request.method === "POST") { const user = await db.prepare("SELECT code FROM identities WHERE code = ?").bind(match[1]).first(); if (!user) return json({ error: "用户不存在" }, 404); await db.prepare("DELETE FROM password_reset_codes WHERE identity_code = ?").bind(match[1]).run(); const code = randomB64(24).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); await db.prepare("INSERT INTO password_reset_codes (code_hash, identity_code, expires_at) VALUES (?, ?, ?)").bind(await sha256(code), match[1], new Date(Date.now() + RESET_MINUTES * 60_000).toISOString()).run(); await revokeSessions(db, match[1]); return json({ resetCode: code, expiresInMinutes: RESET_MINUTES }); }
   return json({ error: "未找到管理接口" }, 404);
 }
 
@@ -419,15 +369,6 @@ async function taskApi(request, env, url, account) {
       if (!existing) throw error;
       return json({ task: taskFromRow(existing), replayed: true });
     }
-  }
-  if (request.method === "POST" && pathname === "/api/tasks/encrypt") {
-    const { tasks } = await bodyFrom(request);
-    if (!Array.isArray(tasks) || !tasks.length || tasks.length > 50) return json({ error: "任务密文数据无效" }, 400);
-    const encrypted = tasks.map(sanitizeEncryptedTaskContent);
-    const ids = encrypted.map((task) => task.id);
-    if (new Set(ids).size !== ids.length) return json({ error: "任务密文数据重复" }, 400);
-    await db.batch(encrypted.map((task) => db.prepare("UPDATE tasks SET title = ?, details = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND identity_code = ?").bind(task.title, task.details, task.id, identity)));
-    return json({ ok: true });
   }
   if (request.method === "POST" && pathname === "/api/tasks/reorder") {
     const { ids, pinnedIds, completed } = await bodyFrom(request);
