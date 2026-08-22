@@ -6,9 +6,9 @@ RabbitToDo 是一个面向个人使用的轻量待办 PWA，围绕"快速记录�
 
 当前本地开发基线：
 
-- Git commit：`e97fd41`（`main`）
-- 应用版本：`v20260822.090531`
-- Service Worker 缓存：`rabbittodo-v107`
+- Git commit：`f12c32f`（`main`）
+- 应用版本：`v20260822.091737`
+- Service Worker 缓存：`rabbittodo-v108`
 - 数据平台：Cloudflare Workers + D1
 - 源代码：GitHub `suddenrabbit/rabbittodo`
 - `migrations/0010_account_task_sort_mode.sql` 已应用到本地与生产 D1，构成当前排序偏好基线。

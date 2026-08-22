@@ -27,9 +27,9 @@ git log -5 --oneline
 当前本地开发基线：
 
 - 分支：`main`
-- commit：`e97fd41`（后续以 `git log` 为准）
-- 应用版本：`v20260822.090531`
-- Service Worker：`rabbittodo-v107`
+- commit：`f12c32f`（后续以 `git log` 为准）
+- 应用版本：`v20260822.091737`
+- Service Worker：`rabbittodo-v108`
 - 技术栈：原生 HTML/CSS/JavaScript PWA + Cloudflare Worker + D1
 - 本地预览：`http://localhost:8792`
 - 本地与生产 D1 均已应用 `migrations/0010_account_task_sort_mode.sql`；后续新增 schema 仍须先执行对应的 `pnpm run db:migrate:remote`，再部署代码。

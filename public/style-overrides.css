@@ -1418,10 +1418,10 @@ body.is-task-dragging {
   height: calc(56px + env(safe-area-inset-bottom));
   padding: 4px max(20px, env(safe-area-inset-right)) calc(2px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
   border-top: 1px solid rgba(255, 255, 255, .64);
-  background: rgba(248, 248, 250, .6);
+  background: rgba(248, 248, 250, .45);
   box-shadow: 0 -8px 24px rgba(32, 33, 38, .06);
-  -webkit-backdrop-filter: blur(20px) saturate(165%);
-  backdrop-filter: blur(20px) saturate(165%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
 }
 
 .tabbar.tabbar-compact.tabbar-has-add {

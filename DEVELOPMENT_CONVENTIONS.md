@@ -10,7 +10,7 @@
 - 本地验证：使用已有用户名密码账号验证持续登录，并按需验证新用户名注册。
 - 生产域名：`https://todo.srabbitwork.site`
 - 生产数据库：Cloudflare D1，名称 `rabbittodo`，绑定名 `DB`
-- 当前 2.6 本地开发基线：commit `e97fd41`，应用版本 `v20260822.090531`，Service Worker `rabbittodo-v107`。`migrations/0010_account_task_sort_mode.sql` 已在本地与生产 D1 应用。
+- 当前 2.6 本地开发基线：commit `f12c32f`，应用版本 `v20260822.091737`，Service Worker `rabbittodo-v108`。`migrations/0010_account_task_sort_mode.sql` 已在本地与生产 D1 应用。
 - 2.2 已上线基线：commit `4150cfa`，应用版本 `v20260803.141847`，Service Worker `rabbittodo-v62`
 - 2.0 生产起点（兼容与回退边界）：commit `e2498f7`，应用版本 `v20260801.110605`，Service Worker `rabbittodo-v43`
 - 用户通常通过 GitHub Desktop 将本地 commit 推送到 GitHub。
