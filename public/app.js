@@ -3,8 +3,8 @@ const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙
 const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260824.200106";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v115";
+const APP_VERSION = "v20260824.220156";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v116";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_UPDATE_TIMEOUT = 5_000;
@@ -21,30 +21,10 @@ const ENCRYPTION_INFO_V2 = "task-content";
 const USERNAME_PATTERN = /^[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_]{1,9}$/u;
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-const isIOSDevice = /iPhone|iPad|iPod/.test(navigator.userAgent) || isIPad;
-const isIOSStandalone = isIOSDevice && navigator.standalone === true;
 document.documentElement.classList.toggle("is-ipad", isIPad);
-document.documentElement.classList.toggle("is-ios-standalone", isIOSStandalone);
-document.documentElement.classList.toggle("is-ios-browser", isIOSDevice && !isIOSStandalone);
 document.documentElement.classList.toggle("is-touch-device", navigator.maxTouchPoints > 0 || matchMedia("(pointer: coarse)").matches);
 const isLandscapeViewport = () => window.innerWidth > window.innerHeight;
 let wasLandscapeViewport = isLandscapeViewport();
-let tabbarAlignmentFrame = 0;
-const scheduleTabbarAlignment = () => {
-  cancelAnimationFrame(tabbarAlignmentFrame);
-  tabbarAlignmentFrame = requestAnimationFrame(() => {
-    const tabbar = app.querySelector(".tabbar-compact");
-    if (!tabbar) return;
-    tabbar.style.removeProperty("--tabbar-center-x");
-    if (!isLandscapeViewport() || state.view === "profile") return;
-    const phone = app.querySelector(".phone");
-    const taskPane = app.querySelector(".workspace-tasks");
-    if (!phone || !taskPane) return;
-    const phoneRect = phone.getBoundingClientRect();
-    const taskPaneRect = taskPane.getBoundingClientRect();
-    tabbar.style.setProperty("--tabbar-center-x", `${taskPaneRect.left - phoneRect.left + taskPaneRect.width / 2}px`);
-  });
-};
 const updateViewportClasses = () => {
   const isLandscape = isLandscapeViewport();
   document.documentElement.classList.toggle("is-compact-landscape", isLandscape);
@@ -54,8 +34,6 @@ const updateViewportClasses = () => {
   } else if (!isLandscape && wasLandscapeViewport) {
     state.filtersOpen = false;
     render();
-  } else {
-    scheduleTabbarAlignment();
   }
   wasLandscapeViewport = isLandscape;
 };
@@ -1612,7 +1590,7 @@ function render() {
   const todoIsActive = state.view === "todo";
   const doneIsActive = state.view === "done";
   app.innerHTML = `<section class="phone"><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
-    <nav class="tabbar tabbar-compact ${tabbarHasAddButton ? "tabbar-has-add" : ""}" aria-label="主导航"><button data-action="view" data-view="todo" class="${todoIsActive ? "active" : ""}" ${todoIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">☐</span>待办</button>${tabbarHasAddButton ? '<button class="add-button" data-action="add" aria-label="添加事项"><span class="add-button-icon" aria-hidden="true">+</span></button>' : ""}<button data-action="view" data-view="done" class="${doneIsActive ? "active" : ""}" ${doneIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">✓</span>已办</button></nav></section>${editor()}${datePicker()}${reminderPicker()}${identityGate()}`;
+    <div class="dock-layer ${tabbarHasAddButton ? "dock-layer-tasks" : "dock-layer-profile"}"><nav class="tabbar tabbar-compact ${tabbarHasAddButton ? "tabbar-has-add" : ""}" aria-label="主导航"><button data-action="view" data-view="todo" class="${todoIsActive ? "active" : ""}" ${todoIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">☐</span>待办</button>${tabbarHasAddButton ? '<button class="add-button" data-action="add" aria-label="添加事项"><span class="add-button-icon" aria-hidden="true">+</span></button>' : ""}<button data-action="view" data-view="done" class="${doneIsActive ? "active" : ""}" ${doneIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">✓</span>已办</button></nav></div></section>${editor()}${datePicker()}${reminderPicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
     persistentAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
@@ -1629,7 +1607,6 @@ function render() {
   if (persistentIdentitySymbol && nextIdentitySymbol && persistentIdentitySymbol !== nextIdentitySymbol) nextIdentitySymbol.replaceWith(persistentIdentitySymbol);
   else if (nextIdentitySymbol) persistentIdentitySymbol = nextIdentitySymbol;
   restoreTaskScroll(scrollSnapshot);
-  scheduleTabbarAlignment();
 }
 
 function openEditor(task = { title: "", details: "", color: state.themeColor, status: "none", tags: [], due_date: "", pinned: false, pinned_at: null, reminder: null }) { state.editor = { ...task, status: task.status || "none", pinned: Boolean(task.pinned), reminder: task.reminder || null }; state.datePicker = null; state.reminderPicker = null; state.draftTags = [...task.tags]; state.tagInput = ""; render(); }
