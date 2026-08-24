@@ -3,8 +3,8 @@ const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙
 const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260823.003009";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v113";
+const APP_VERSION = "v20260824.194953";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v114";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_UPDATE_TIMEOUT = 5_000;
@@ -22,6 +22,7 @@ const USERNAME_PATTERN = /^[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_]{1,9}
 const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 document.documentElement.classList.toggle("is-ipad", isIPad);
+document.documentElement.classList.toggle("is-ios-standalone", navigator.standalone === true);
 document.documentElement.classList.toggle("is-touch-device", navigator.maxTouchPoints > 0 || matchMedia("(pointer: coarse)").matches);
 const isLandscapeViewport = () => window.innerWidth > window.innerHeight;
 let wasLandscapeViewport = isLandscapeViewport();

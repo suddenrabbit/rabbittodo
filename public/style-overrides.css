@@ -1520,6 +1520,21 @@ body.is-task-dragging {
   }
 }
 
+/* iOS 主屏 PWA 的 svh/dvh 会重复扣除安全区；standalone 下改用包含安全区的 vh。 */
+:root.is-ios-standalone,
+:root.is-ios-standalone body {
+  height: 100vh;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+:root.is-ios-standalone .app-shell,
+:root.is-ios-standalone .phone {
+  height: 100vh;
+  min-height: 100vh;
+  max-height: 100vh;
+}
+
 .theme-settings { margin-top: 24px; padding-top: 20px; border-top: 1px solid #efedf3; }
 .theme-settings h2 { margin: 0 0 13px; color: #55535d; font-size: 13px; }
 .theme-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
