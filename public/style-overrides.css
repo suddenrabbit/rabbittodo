@@ -1535,6 +1535,11 @@ body.is-task-dragging {
   max-height: 100vh;
 }
 
+/* iOS 浏览器的动态工具栏会改变 dvh；胶囊固定到可视视口，避免跟随较短容器上移。 */
+:root.is-ios-browser .tabbar.tabbar-compact {
+  position: fixed;
+}
+
 .theme-settings { margin-top: 24px; padding-top: 20px; border-top: 1px solid #efedf3; }
 .theme-settings h2 { margin: 0 0 13px; color: #55535d; font-size: 13px; }
 .theme-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
