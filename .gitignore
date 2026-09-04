@@ -7,3 +7,5 @@ backups/
 *.sqlite-shm
 *.sqlite-wal
 *.sql.bak
+
+/README.md
