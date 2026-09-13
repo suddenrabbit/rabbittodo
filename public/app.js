@@ -3,8 +3,8 @@ const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙
 const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260913.225444";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v120";
+const APP_VERSION = "v20260913.233657";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v123";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_UPDATE_TIMEOUT = 5_000;
@@ -1573,6 +1573,37 @@ function restoreTaskScroll(snapshot) {
   scroller.scrollTop += offset - snapshot.anchorOffset;
 }
 
+function renderView(nextView) {
+  if (nextView === state.view) return;
+  const previousLens = app.querySelector(".tabbar-selection");
+  const previousRect = previousLens?.getBoundingClientRect();
+  const shouldAnimate = Boolean(previousRect)
+    && (nextView === "todo" || nextView === "done")
+    && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  state.view = nextView;
+  render();
+  if (!shouldAnimate) return;
+  const nextLens = app.querySelector(".tabbar-selection");
+  if (!nextLens || typeof nextLens.animate !== "function") return;
+  const nextRect = nextLens.getBoundingClientRect();
+  const deltaX = previousRect.left - nextRect.left;
+  const deltaY = previousRect.top - nextRect.top;
+  const overshootX = (Math.sign(-deltaX) || 1) * 4;
+  nextLens.animate([
+    { transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scaleX(1) scaleY(1)`, filter: "brightness(1)" },
+    { offset: .18, transform: `translate3d(${deltaX * .72}px, ${deltaY * .72}px, 0) scaleX(1.08) scaleY(.96)`, filter: "brightness(1.09)" },
+    { offset: .58, transform: `translate3d(${deltaX * .18}px, ${deltaY * .18}px, 0) scaleX(1.12) scaleY(.94)`, filter: "brightness(1.12)" },
+    { offset: .82, transform: `translate3d(${overshootX}px, 0, 0) scaleX(.985) scaleY(1.018)`, filter: "brightness(1.04)" },
+    { transform: "translate3d(0, 0, 0) scaleX(1)", filter: "brightness(1)" }
+  ], { duration: 420, easing: "cubic-bezier(.2, .74, .18, 1)" });
+  const activeTab = app.querySelector(`.tabbar-compact button[data-view="${nextView}"]`);
+  activeTab?.animate([
+    { opacity: .62, filter: "saturate(.55)" },
+    { offset: .56, opacity: .72, filter: "saturate(.72)" },
+    { opacity: 1, filter: "saturate(1)" }
+  ], { duration: 420, easing: "ease-out" });
+}
+
 function render() {
   const scrollSnapshot = captureTaskScroll();
   document.documentElement.dataset.theme = state.identity && !state.authPromptOpen ? normalizeThemeColor(state.themeColor) : "violet";
@@ -1590,7 +1621,7 @@ function render() {
   const todoIsActive = state.view === "todo";
   const doneIsActive = state.view === "done";
   app.innerHTML = `<section class="phone"><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
-    <div class="dock-layer ${tabbarHasAddButton ? "dock-layer-tasks" : "dock-layer-profile"}"><div class="dock-cluster ${tabbarHasAddButton ? "dock-cluster-has-add" : ""}"><nav class="tabbar tabbar-compact" aria-label="主导航"><button data-action="view" data-view="todo" class="${todoIsActive ? "active" : ""}" ${todoIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">☐</span>待办</button><button data-action="view" data-view="done" class="${doneIsActive ? "active" : ""}" ${doneIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">✓</span>已办</button></nav>${tabbarHasAddButton ? '<button class="add-button" data-action="add" aria-label="添加事项"><span class="add-button-icon" aria-hidden="true">+</span></button>' : ""}</div></div></section>${editor()}${datePicker()}${reminderPicker()}${identityGate()}`;
+    <div class="dock-layer ${tabbarHasAddButton ? "dock-layer-tasks" : "dock-layer-profile"}"><div class="dock-cluster ${tabbarHasAddButton ? "dock-cluster-has-add" : ""}"><nav class="tabbar tabbar-compact ${doneIsActive ? "is-done-active" : "is-todo-active"}" aria-label="主导航">${todoIsActive || doneIsActive ? '<i class="tabbar-selection" aria-hidden="true"></i>' : ""}<button data-action="view" data-view="todo" class="${todoIsActive ? "active" : ""}" ${todoIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">☐</span>待办</button><button data-action="view" data-view="done" class="${doneIsActive ? "active" : ""}" ${doneIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">✓</span>已办</button></nav>${tabbarHasAddButton ? '<button class="add-button" data-action="add" aria-label="添加事项"><span class="add-button-icon" aria-hidden="true">+</span></button>' : ""}</div></div></section>${editor()}${datePicker()}${reminderPicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
     persistentAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
@@ -1866,7 +1897,7 @@ app.addEventListener("click", async (event) => {
       reloadForServiceWorkerUpdate();
       return;
     }
-    if (action === "view") { state.view = button.dataset.view; return render(); }
+    if (action === "view") return renderView(button.dataset.view);
     if (action === "profile") { state.view = "profile"; refreshPushStatus(); return render(); }
     if (action === "auth-login") return openAuth("login");
     if (action === "auth-register") return openAuth("register");
