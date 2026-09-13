@@ -105,3 +105,37 @@ button { border: 0; cursor: pointer; }
   .identity-table td:nth-child(4) { color: var(--muted); font-size: 11px; }
   .identity-table td:last-child { grid-column: 1 / -1; }
 }
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --violet: #9f96ff;
+    --ink: #f1f2f4;
+    --muted: #a0a2ac;
+    --line: rgba(255, 255, 255, .09);
+    --paper: #14151a;
+  }
+
+  body { background: #14151a; }
+  .login-card,
+  .summary-card,
+  .refresh-button,
+  .identity-table-wrap { background: #1c1d23; }
+  .login-card { box-shadow: 0 20px 60px rgba(0, 0, 0, .46); }
+  .login-card input { background: #25262d; border-color: var(--line); color: var(--ink); }
+  .logout-button,
+  .filters button { background: #25262d; color: #b2b4bd; }
+  .filters button.is-active { background: rgba(159, 150, 255, .16); color: #b8b1ff; }
+  .identity-table th { background: #24252b; color: #a5a7b0; }
+  .identity-table td { border-top-color: var(--line); }
+  .status-enabled,
+  .action-enable { background: rgba(72, 164, 130, .18); color: #8bd1b5; }
+  .status-disabled,
+  .action-disable { background: rgba(201, 77, 93, .18); color: #ef929d; }
+
+}
+
+@media (prefers-color-scheme: dark) and (max-width: 720px) {
+  .identity-table-wrap { background: transparent; }
+  .identity-table tr { background: #1c1d23; border-color: var(--line); }
+}

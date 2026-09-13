@@ -1625,3 +1625,336 @@ body.is-task-dragging {
 .theme-option:disabled { cursor: wait; opacity: .72; }
 .profile-card .theme-status { min-height: 16px; margin: 9px 0 0; color: #9a98a3; font-size: 10px; }
 .profile-card .theme-status.is-error { color: #b54752; }
+
+/* Automatic dark appearance: layered graphite surfaces with theme-aware accents. */
+:root {
+  color-scheme: light;
+  --ui-canvas: #eeedf4;
+  --ui-page: #f8f8fa;
+  --ui-surface: #fff;
+  --ui-surface-raised: #fbfbfd;
+  --ui-control: #f0eff4;
+  --ui-text: #202126;
+  --ui-text-secondary: #8e8e98;
+  --ui-text-tertiary: #aaa9b4;
+  --ui-line: #e7e6eb;
+  --ui-line-strong: #dfdee6;
+  --ui-glass: rgba(255, 255, 255, .24);
+  --ui-glass-line: rgba(255, 255, 255, .30);
+  --ui-selected: rgba(118, 118, 128, .10);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ink: #f1f2f4;
+    --muted: #a0a2ac;
+    --paper: #14151a;
+    --ui-canvas: #0d0e12;
+    --ui-page: #14151a;
+    --ui-surface: #1c1d23;
+    --ui-surface-raised: #202127;
+    --ui-control: #25262d;
+    --ui-text: #f1f2f4;
+    --ui-text-secondary: #a0a2ac;
+    --ui-text-tertiary: #7d808b;
+    --ui-line: rgba(255, 255, 255, .08);
+    --ui-line-strong: rgba(255, 255, 255, .12);
+    --ui-glass: rgba(35, 36, 43, .68);
+    --ui-glass-line: rgba(255, 255, 255, .10);
+    --ui-selected: rgba(255, 255, 255, .09);
+    --accent: #8f84f4;
+    --accent-strong: #6e61d8;
+    --accent-highlight: #aaa1ff;
+    --accent-soft: rgba(143, 132, 244, .16);
+    --accent-border: rgba(170, 161, 255, .52);
+    --accent-shadow: rgba(73, 61, 169, .42);
+    --accent-gradient-start: #6559c7;
+    --accent-gradient-end: #403786;
+    --avatar-gradient-start: #887df1;
+    --avatar-gradient-end: #5146b3;
+  }
+
+  :root[data-theme="mint"] {
+    --accent: #49c5a6;
+    --accent-strong: #277b68;
+    --accent-highlight: #6edcc0;
+    --accent-soft: rgba(73, 197, 166, .15);
+    --accent-border: rgba(110, 220, 192, .48);
+    --accent-shadow: rgba(29, 108, 89, .40);
+    --accent-gradient-start: #327f6d;
+    --accent-gradient-end: #1d594c;
+    --avatar-gradient-start: #68d8bc;
+    --avatar-gradient-end: #287e69;
+  }
+
+  :root[data-theme="orange"] {
+    --accent: #ed9847;
+    --accent-strong: #ad611d;
+    --accent-highlight: #ffc078;
+    --accent-soft: rgba(237, 152, 71, .16);
+    --accent-border: rgba(255, 192, 120, .48);
+    --accent-shadow: rgba(145, 74, 17, .42);
+    --accent-gradient-start: #a95f1e;
+    --accent-gradient-end: #6e360c;
+    --avatar-gradient-start: #f1ad63;
+    --avatar-gradient-end: #a25819;
+  }
+
+  :root[data-theme="blue"] {
+    --accent: #62ace0;
+    --accent-strong: #347fae;
+    --accent-highlight: #80c8f4;
+    --accent-soft: rgba(98, 172, 224, .16);
+    --accent-border: rgba(128, 200, 244, .48);
+    --accent-shadow: rgba(37, 101, 145, .42);
+    --accent-gradient-start: #3f8bbe;
+    --accent-gradient-end: #285d86;
+    --avatar-gradient-start: #7fc5ef;
+    --avatar-gradient-end: #397fac;
+  }
+
+  :root[data-theme="rose"] {
+    --accent: #df79a4;
+    --accent-strong: #ad4974;
+    --accent-highlight: #f18db7;
+    --accent-soft: rgba(223, 121, 164, .16);
+    --accent-border: rgba(241, 141, 183, .48);
+    --accent-shadow: rgba(139, 50, 89, .42);
+    --accent-gradient-start: #b64f7d;
+    --accent-gradient-end: #78304f;
+    --avatar-gradient-start: #ef91b9;
+    --avatar-gradient-end: #ae4d77;
+  }
+
+  html,
+  body,
+  .app-shell { background: var(--ui-canvas); color: var(--ui-text); }
+
+  .phone {
+    background: var(--ui-page);
+    box-shadow: 0 22px 70px rgba(0, 0, 0, .48);
+  }
+
+  .topbar h1,
+  .task-body h3,
+  .profile-card strong,
+  .composer-head h2,
+  .date-picker-head strong,
+  .calendar-nav span,
+  .update-card h2,
+  .identity-card h2 { color: var(--ui-text); }
+
+  .eyebrow,
+  .avatar,
+  .all-summary span,
+  .profile-card p,
+  .profile-card > span,
+  .identity-card p,
+  .identity-card > span,
+  .update-card > span,
+  .notification-status { color: var(--ui-text-secondary); }
+
+  .archive-note,
+  .empty-state,
+  .task-encryption-note,
+  .task-details,
+  .filter-result,
+  .version-label,
+  .profile-card .theme-status { color: var(--ui-text-tertiary); }
+
+  .task-card,
+  .all-summary,
+  .profile-card {
+    background: var(--ui-surface);
+    border-color: var(--ui-line);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, .16);
+  }
+
+  .task-card.color-violet { border-color: #5d5687; box-shadow: 0 3px 12px rgba(38, 32, 88, .22); }
+  .task-card.color-mint { border-color: #3d6c61; box-shadow: 0 3px 12px rgba(24, 76, 63, .22); }
+  .task-card.color-orange { border-color: #775b3d; box-shadow: 0 3px 12px rgba(92, 56, 24, .22); }
+  .task-card.color-blue { border-color: #42667f; box-shadow: 0 3px 12px rgba(26, 63, 88, .22); }
+  .task-card.color-rose { border-color: #70495b; box-shadow: 0 3px 12px rgba(86, 31, 56, .22); }
+
+  .task-card.is-completed { opacity: .76; }
+  .check-button { background: #18191e; border-color: #555761; }
+  .task-card .task-color-dot { box-shadow: 0 0 0 3px var(--ui-surface); }
+  .task-meta { color: var(--ui-text-tertiary); }
+  .task-meta .due { background: var(--ui-control); color: #b4b6bf; }
+
+  .status-badge.in_progress,
+  .reminder-badge { background: rgba(88, 143, 214, .18); color: #91bdf2; }
+  .status-badge.paused { background: rgba(255, 255, 255, .08); color: #b2b4bd; }
+  .sync-badge { background: rgba(222, 151, 62, .17); color: #e8b36b; }
+  .due-distance-badge.is-overdue,
+  .overdue-badge { background: rgba(217, 79, 94, .19); color: #f08c98; }
+  .due-distance-badge.is-today { background: rgba(223, 153, 58, .18); color: #efb467; }
+  .due-distance-badge.is-upcoming { background: rgba(78, 134, 205, .18); color: #8ab7ec; }
+  .completed-date { background: rgba(74, 158, 126, .18); color: #88d0b4; }
+
+  .sync-notice { color: #d2aa67; }
+  button.sync-notice { text-decoration-color: #806d4d; }
+  .sync-notice.is-syncing { color: #a69de8; }
+  .sync-notice.is-success { color: #83c4a2; }
+  .sync-notice.is-failed { color: #ec8d98; text-decoration-color: #8b525a; }
+
+  .pinned-zone { border-bottom-color: var(--ui-line-strong); }
+  .temporary-pin-divider,
+  .task-zone-title,
+  .regular-zone-title i { color: var(--ui-text-tertiary); }
+  .temporary-pin-divider::before,
+  .temporary-pin-divider::after { background: var(--ui-line-strong); }
+  .task-zone-title b { background: var(--ui-control); color: var(--ui-text-secondary); }
+  .drop-hint { border-color: #50525c; color: var(--ui-text-tertiary); }
+  .task-drag-ghost { box-shadow: 0 18px 38px rgba(0, 0, 0, .58), 0 6px 16px var(--accent-shadow) !important; }
+
+  .filter-toggle,
+  .identity-card > input,
+  .account-form input,
+  .reminder-hour,
+  .reminder-minute {
+    background: var(--ui-control);
+    border-color: var(--ui-line-strong);
+    color: var(--ui-text);
+  }
+
+  .filter-toggle { box-shadow: 0 3px 10px rgba(0, 0, 0, .16); }
+  .filter-toggle-title { color: var(--ui-text); }
+  .filter-toggle-summary,
+  .filter-toggle i,
+  .filter-group-header > p,
+  .sort-mode-switch { color: var(--ui-text-secondary); }
+  .filters button,
+  .color-filters button,
+  .status-option,
+  .pin-toggle,
+  .clear-date-button,
+  .calendar-nav button,
+  .reminder-freq { background: var(--ui-control); color: #b2b4bd; }
+  .sort-mode-toggle { background: #3a3b43; }
+  .sort-mode-toggle i { background: #d8d9de; box-shadow: 0 1px 3px rgba(0, 0, 0, .42); }
+
+  .modal-backdrop,
+  .identity-gate,
+  .date-picker-backdrop { background: rgba(4, 5, 8, .68); }
+  .update-gate { background: rgba(4, 5, 8, .62); }
+  .composer,
+  .date-picker-sheet,
+  .identity-card,
+  .update-card,
+  .device-popover {
+    background: var(--ui-surface-raised);
+    color: var(--ui-text);
+    box-shadow: 0 18px 52px rgba(0, 0, 0, .48);
+  }
+  .device-popover { border-color: var(--ui-line-strong); }
+
+  .sheet-grabber { background: #555761; }
+  .composer > input,
+  .composer > textarea,
+  .composer-row { border-bottom-color: var(--ui-line); color: var(--ui-text); }
+  .composer > input,
+  .composer > textarea,
+  .tag-input-wrap input { color: var(--ui-text); }
+  .composer > input::placeholder,
+  .composer > textarea::placeholder,
+  .tag-input-wrap input::placeholder,
+  .identity-card input::placeholder,
+  .account-form input::placeholder { color: #70727c; }
+  .pin-editor > span small,
+  .calendar-weekdays { color: var(--ui-text-tertiary); }
+  .calendar-day,
+  .reminder-time-row > span,
+  .reminder-freq-row > span,
+  .due-reminder-item { color: var(--ui-text); }
+  .delete-button { background: rgba(197, 72, 88, .17); color: #f08b97; }
+  .identity-card .auth-error { background: rgba(197, 72, 88, .17); color: #f09aa4; }
+  .identity-card input:disabled { background: #292a31; color: #92949e; -webkit-text-fill-color: #92949e; }
+  .identity-close-button { background: var(--ui-control); color: #b2b4bd; }
+  .identity-secondary-button { color: var(--ui-text-secondary); }
+  .auth-links button,
+  .identity-status-card .identity-code-preview,
+  .draft-tag i { color: var(--accent-highlight); }
+  .identity-symbol {
+    background: var(--accent-strong);
+    box-shadow: 0 8px 22px var(--accent-shadow);
+  }
+  .identity-card input:-webkit-autofill,
+  .account-form input:-webkit-autofill {
+    -webkit-text-fill-color: var(--ui-text);
+    -webkit-box-shadow: 0 0 0 1000px var(--ui-control) inset;
+  }
+
+  .due-reminder-bar { background: rgba(75, 124, 190, .15); border-color: rgba(115, 166, 231, .28); }
+  .device-item { color: var(--ui-text); }
+  .device-item .device-meta { color: var(--ui-text-tertiary); }
+  .device-item button { color: #ef7f8a; }
+
+  .theme-settings { border-top-color: var(--ui-line); }
+  .theme-settings h2 { color: #c4c5cb; }
+  .profile-card .theme-option { color: var(--ui-text-secondary); }
+  .theme-option i { border-color: var(--ui-surface); box-shadow: 0 0 0 1px #555761; }
+  .color-picker.selected { box-shadow: 0 0 0 3px #35363e; }
+  .profile-card .theme-status.is-error,
+  .sort-mode-status { color: #ef8b96; }
+
+  .brand-inline,
+  .tabbar .active,
+  .all-summary strong,
+  .composer-head button,
+  .composer-row > input,
+  .tag-input-wrap input,
+  .date-picker-head button,
+  .calendar-nav button,
+  .reminder-time-inputs > span,
+  .reminder-freq,
+  .profile-actions button,
+  .notification-test-link,
+  .notification-devices,
+  .task-zone-title i,
+  .due-date-value { color: var(--accent-highlight); }
+
+  .filters .filter-active,
+  .color-filters .filter-active,
+  .draft-tag,
+  .status-option.selected,
+  .pin-toggle.is-active,
+  .set-date-button,
+  .calendar-shortcuts button,
+  .profile-card .theme-option.is-selected {
+    background: var(--accent-soft);
+    color: var(--accent-highlight);
+  }
+
+  .calendar-day.is-today { color: var(--accent-highlight); box-shadow: inset 0 0 0 1px var(--accent-border); }
+  .tabbar.tabbar-compact {
+    background: var(--ui-glass);
+    border-color: var(--ui-glass-line);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .30), inset 0 1px 0 rgba(255, 255, 255, .06);
+  }
+  .tabbar-compact > button:not(.add-button).active { background: var(--ui-selected); box-shadow: none; }
+  .dock-cluster .add-button {
+    background: color-mix(in srgb, var(--accent-gradient-start) 74%, transparent);
+    box-shadow: 0 9px 26px var(--accent-shadow);
+  }
+  .dock-cluster .add-button:active { background: color-mix(in srgb, var(--accent-gradient-start) 86%, transparent); }
+
+  .progress-card { box-shadow: 0 12px 28px rgba(0, 0, 0, .30); }
+  .progress-ring::before { background: color-mix(in srgb, var(--accent-gradient-end) 86%, #17181e); }
+  .avatar-icon,
+  .profile-icon {
+    background:
+      radial-gradient(circle at 24% 18%, rgba(255, 255, 255, .34) 0, transparent 48%),
+      linear-gradient(136deg, var(--avatar-gradient-start), var(--avatar-gradient-end));
+  }
+
+}
+
+@media (prefers-color-scheme: dark) and (display-mode: standalone),
+  (prefers-color-scheme: dark) and (max-width: 520px) {
+  html,
+  body,
+  .app-shell,
+  .phone { background: var(--ui-page); }
+}
