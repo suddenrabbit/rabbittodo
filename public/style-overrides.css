@@ -1427,8 +1427,20 @@ body.is-task-dragging {
   pointer-events: none;
 }
 
-.dock-layer .tabbar {
+.dock-layer .dock-cluster {
   pointer-events: auto;
+}
+
+.dock-cluster {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: min(calc(100% - 32px), 330px);
+}
+
+.dock-cluster:not(.dock-cluster-has-add) {
+  width: min(calc(100% - 32px), 262px);
 }
 
 .tabbar.tabbar-compact {
@@ -1440,10 +1452,11 @@ body.is-task-dragging {
   right: auto;
   bottom: auto;
   left: auto;
-  flex: 0 0 56px;
-  width: min(calc(100% - 32px), 280px);
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
   height: 56px;
-  padding: 4px 10px 2px;
+  padding: 4px 6px 2px;
   border: 1px solid rgba(255, 255, 255, .30);
   border-radius: 28px;
   background: rgba(255, 255, 255, .24);
@@ -1453,15 +1466,15 @@ body.is-task-dragging {
   transform: none;
 }
 
-.tabbar.tabbar-compact.tabbar-has-add {
-  grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr);
-}
-
 .tabbar-compact button {
-  width: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
   height: 44px;
-  gap: 2px;
-  font-size: 10px;
+  gap: 7px;
+  padding: 0 12px;
+  font-size: 12px;
   justify-self: center;
 }
 
@@ -1471,7 +1484,7 @@ body.is-task-dragging {
 }
 
 .tabbar-compact > button:not(.add-button).active {
-  width: 72px;
+  width: 100%;
   background: rgba(118, 118, 128, .10);
   box-shadow: 0 2px 8px rgba(32, 33, 38, .05);
 }
@@ -1481,11 +1494,11 @@ body.is-task-dragging {
 }
 
 .tabbar-compact button > span {
-  font-size: 22px;
-  line-height: 22px;
+  font-size: 20px;
+  line-height: 20px;
 }
 
-.tabbar-compact .add-button {
+.dock-cluster .add-button {
   display: grid;
   place-items: center;
   position: relative;
@@ -1493,23 +1506,27 @@ body.is-task-dragging {
   left: auto;
   bottom: auto;
   padding: 0;
-  width: 44px;
-  height: 44px;
+  flex: 0 0 56px;
+  width: 56px;
+  height: 56px;
   border: 0;
   border-radius: 50%;
   background: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent-strong) 64%, transparent);
   color: #fff;
-  box-shadow: none;
+  box-shadow: 0 8px 24px var(--accent-shadow), 0 1px 4px rgba(32, 33, 38, .035);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
   transform: none;
 }
 
-.tabbar-compact .add-button::before {
+.dock-cluster .add-button::before {
   content: none;
 }
 
-.tabbar-compact .add-button-icon {
+.dock-cluster .add-button-icon {
   display: block;
-  color: #fff;
+  color: currentColor;
   font-family: Arial, sans-serif;
   font-size: 32px;
   font-weight: 300;
@@ -1517,8 +1534,9 @@ body.is-task-dragging {
   transform: translateY(1px);
 }
 
-.tabbar-compact .add-button:active {
+.dock-cluster .add-button:active {
   background: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent-strong) 76%, transparent);
   transform: scale(.94);
 }
 
@@ -1552,7 +1570,7 @@ body.is-task-dragging {
     padding-left: max(16px, env(safe-area-inset-left));
   }
 
-  :root:is(.is-touch-device, .is-compact-landscape) .dock-layer-tasks .tabbar {
+  :root:is(.is-touch-device, .is-compact-landscape) .dock-layer-tasks .dock-cluster {
     grid-column: 2;
   }
 

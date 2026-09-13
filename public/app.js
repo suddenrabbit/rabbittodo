@@ -3,8 +3,8 @@ const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙
 const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260824.220156";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v116";
+const APP_VERSION = "v20260913.173802";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v119";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_UPDATE_TIMEOUT = 5_000;
@@ -1590,7 +1590,7 @@ function render() {
   const todoIsActive = state.view === "todo";
   const doneIsActive = state.view === "done";
   app.innerHTML = `<section class="phone"><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
-    <div class="dock-layer ${tabbarHasAddButton ? "dock-layer-tasks" : "dock-layer-profile"}"><nav class="tabbar tabbar-compact ${tabbarHasAddButton ? "tabbar-has-add" : ""}" aria-label="主导航"><button data-action="view" data-view="todo" class="${todoIsActive ? "active" : ""}" ${todoIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">☐</span>待办</button>${tabbarHasAddButton ? '<button class="add-button" data-action="add" aria-label="添加事项"><span class="add-button-icon" aria-hidden="true">+</span></button>' : ""}<button data-action="view" data-view="done" class="${doneIsActive ? "active" : ""}" ${doneIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">✓</span>已办</button></nav></div></section>${editor()}${datePicker()}${reminderPicker()}${identityGate()}`;
+    <div class="dock-layer ${tabbarHasAddButton ? "dock-layer-tasks" : "dock-layer-profile"}"><div class="dock-cluster ${tabbarHasAddButton ? "dock-cluster-has-add" : ""}"><nav class="tabbar tabbar-compact" aria-label="主导航"><button data-action="view" data-view="todo" class="${todoIsActive ? "active" : ""}" ${todoIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">☐</span>待办</button><button data-action="view" data-view="done" class="${doneIsActive ? "active" : ""}" ${doneIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">✓</span>已办</button></nav>${tabbarHasAddButton ? '<button class="add-button" data-action="add" aria-label="添加事项"><span class="add-button-icon" aria-hidden="true">+</span></button>' : ""}</div></div></section>${editor()}${datePicker()}${reminderPicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
     persistentAvatar.querySelector("span").textContent = nextAvatar.querySelector("span").textContent;
