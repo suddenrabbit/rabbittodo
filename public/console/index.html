@@ -3,8 +3,42 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#f7f7fa" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#14151a" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f7f7fa" data-light="#f7f7fa" data-dark="#14151a" />
+  <script>
+    (() => {
+      const key = "rabbittodo-appearance-mode";
+      const modes = ["system", "light", "dark"];
+      const media = window.matchMedia("(prefers-color-scheme: dark)");
+      const root = document.documentElement;
+      const themeMeta = document.querySelector('meta[name="theme-color"]');
+      const normalize = (value) => modes.includes(value) ? value : "system";
+      const resolve = (mode) => mode === "system" ? (media.matches ? "dark" : "light") : mode;
+      const apply = (value, persist = false) => {
+        const mode = normalize(value);
+        const scheme = resolve(mode);
+        root.dataset.appearanceMode = mode;
+        root.dataset.colorScheme = scheme;
+        root.style.colorScheme = scheme;
+        if (themeMeta) themeMeta.content = scheme === "dark" ? themeMeta.dataset.dark : themeMeta.dataset.light;
+        if (persist) {
+          try { localStorage.setItem(key, mode); } catch {}
+        }
+        return mode;
+      };
+      let stored = "system";
+      try { stored = localStorage.getItem(key) || "system"; } catch {}
+      window.RabbitToDoAppearance = { apply, current: () => normalize(root.dataset.appearanceMode) };
+      apply(stored);
+      const followSystem = () => {
+        if (root.dataset.appearanceMode === "system") apply("system");
+      };
+      if (media.addEventListener) media.addEventListener("change", followSystem);
+      else media.addListener(followSystem);
+      window.addEventListener("storage", (event) => {
+        if (event.key === key) apply(event.newValue || "system");
+      });
+    })();
+  </script>
   <meta name="robots" content="noindex, nofollow" />
   <title>RabbitToDo 管理后台</title>
   <link rel="icon" type="image/png" href="/rabbittodo-icon-dock-v4.png" />

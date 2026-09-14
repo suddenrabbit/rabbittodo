@@ -1,10 +1,13 @@
 const COLORS = ["violet", "mint", "orange", "blue", "rose"];
 const COLOR_NAMES = { violet: "葡萄紫", mint: "薄荷绿", orange: "日落橙", blue: "海盐蓝", rose: "莓果粉" };
 const normalizeThemeColor = (value) => COLORS.includes(String(value || "")) ? String(value) : "violet";
+const APPEARANCE_MODES = ["system", "light", "dark"];
+const APPEARANCE_NAMES = { system: "自动", light: "浅色", dark: "深色" };
+const normalizeAppearanceMode = (value) => APPEARANCE_MODES.includes(String(value || "")) ? String(value) : "system";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260913.233657";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v123";
+const APP_VERSION = "v20260914.085111";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v125";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_UPDATE_TIMEOUT = 5_000;
@@ -77,7 +80,7 @@ localStorage.removeItem("todo-identity");
 const state = {
   identity: "", username: "", encryptionSeed: "", authMode: "login", authPromptOpen: true, authSubmitting: false, authDirty: false,
   authError: "", authUsername: "", authPassword: "", authConfirm: "", authResetCode: "", identityDraft: "",
-  passwordDialog: false, themeColor: "violet", themeSaving: false, themeError: "", taskSortMode: "manual", sortModeSaving: false, sortModeError: "", tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, reminderPicker: null, pushStatus: null, dueReminders: [], draftTags: [], tagInput: "",
+  passwordDialog: false, appearanceMode: normalizeAppearanceMode(window.RabbitToDoAppearance?.current()), themeColor: "violet", themeSaving: false, themeError: "", taskSortMode: "manual", sortModeSaving: false, sortModeError: "", tasks: [], view: "todo", tag: "全部", color: "全部", filtersOpen: wasLandscapeViewport, editor: null, datePicker: null, reminderPicker: null, pushStatus: null, dueReminders: [], draftTags: [], tagInput: "",
   updateApplying: false,
   syncStatus: "idle", syncError: "", syncCount: 0,
 };
@@ -800,6 +803,13 @@ async function updateThemeColor(nextTheme) {
     await persistLocalSnapshot().catch(() => {});
     render();
   }
+}
+
+function updateAppearanceMode(nextMode) {
+  const next = normalizeAppearanceMode(nextMode);
+  if (next === state.appearanceMode) return;
+  state.appearanceMode = normalizeAppearanceMode(window.RabbitToDoAppearance?.apply(next, true) || next);
+  render();
 }
 
 async function updateTaskSortMode(nextMode) {
@@ -1530,9 +1540,10 @@ function profilePage() {
   const devices = state.pushStatus?.devices || [];
   const deviceLink = notif.test ? `<a href="#" class="notification-devices" data-action="toggle-devices">${notif.deviceCount} 台设备</a>` : "";
   const devicePanel = state.pushDevicesOpen && devices.length ? `<div class="device-popover">${devices.map((device) => `<div class="device-item"><span class="device-name">${escapeHtml(deviceLabel(device.userAgent))}</span><span class="device-meta">注册于 ${escapeHtml(String(device.createdAt || "").slice(0, 10))}</span><button type="button" data-action="remove-device" data-endpoint="${escapeHtml(device.endpoint)}">移除</button></div>`).join("")}</div>` : "";
+  const appearanceOptions = APPEARANCE_MODES.map((mode) => `<button type="button" class="appearance-option ${state.appearanceMode === mode ? "is-selected" : ""}" data-action="pick-appearance" data-appearance="${mode}" aria-pressed="${state.appearanceMode === mode}">${APPEARANCE_NAMES[mode]}</button>`).join("");
   const themeOptions = COLORS.map((color) => `<button type="button" class="theme-option theme-${color} ${state.themeColor === color ? "is-selected" : ""}" data-action="pick-theme" data-theme="${color}" aria-label="${COLOR_NAMES[color]}" aria-pressed="${state.themeColor === color}" ${state.themeSaving ? "disabled" : ""}><i></i><span>${COLOR_NAMES[color]}</span></button>`).join("");
   const themeStatus = state.themeSaving ? '<p class="theme-status" role="status">正在保存主题…</p>' : state.themeError ? `<p class="theme-status is-error" role="alert">${escapeHtml(state.themeError)}</p>` : '<p class="theme-status">新建事项会默认使用所选主题色</p>';
-  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-avatar.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span><section class="theme-settings" aria-labelledby="theme-settings-title"><h2 id="theme-settings-title">主题颜色</h2><div class="theme-options">${themeOptions}</div>${themeStatus}</section>${passwordForm}<p class="notification-status">🔔 ${notif.label}（${deviceLink}）${notifLink}</p>${devicePanel}${notifBtn}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
+  return `<section class="profile-page">${pageHeader("我的")}<section class="profile-card"><div class="profile-icon"><img src="/rabbittodo-avatar.png" alt="RabbitToDo" /></div><p>当前账号</p><strong class="username-display">${escapeHtml(state.username)}</strong><span>登录同一账号，换一台设备也能继续管理待办。</span><section class="appearance-settings" aria-labelledby="appearance-settings-title"><h2 id="appearance-settings-title">外观模式</h2><div class="appearance-options" role="group" aria-label="外观模式">${appearanceOptions}</div><p>仅保存在当前设备</p></section><section class="theme-settings" aria-labelledby="theme-settings-title"><h2 id="theme-settings-title">主题颜色</h2><div class="theme-options">${themeOptions}</div>${themeStatus}</section>${passwordForm}<p class="notification-status">🔔 ${notif.label}（${deviceLink}）${notifLink}</p>${devicePanel}${notifBtn}<div class="profile-actions"><button data-action="change-password">${state.passwordDialog ? "取消修改" : "修改密码"}</button><button data-action="logout">退出登录</button></div></section><p class="version-label">版本 ${APP_VERSION}</p></section>`;
 }
 
 function taskScrollContainer() {
@@ -1903,6 +1914,7 @@ app.addEventListener("click", async (event) => {
     if (action === "auth-register") return openAuth("register");
     if (action === "auth-reset") return openAuth("reset");
     if (action === "change-password") { state.passwordDialog = !state.passwordDialog; return render(); }
+    if (action === "pick-appearance") return updateAppearanceMode(button.dataset.appearance);
     if (action === "pick-theme") return updateThemeColor(button.dataset.theme);
     if (action === "logout") {
       await removePushSubscription();
@@ -2022,6 +2034,18 @@ document.addEventListener("click", (event) => {
 });
 
 app.addEventListener("keydown", (event) => {
+  const appearanceButton = event.target.closest?.('[data-action="pick-appearance"]');
+  if (appearanceButton && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    const currentIndex = APPEARANCE_MODES.indexOf(normalizeAppearanceMode(appearanceButton.dataset.appearance));
+    const nextIndex = event.key === "Home" ? 0
+      : event.key === "End" ? APPEARANCE_MODES.length - 1
+        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + APPEARANCE_MODES.length) % APPEARANCE_MODES.length;
+    const nextMode = APPEARANCE_MODES[nextIndex];
+    updateAppearanceMode(nextMode);
+    requestAnimationFrame(() => app.querySelector(`[data-action="pick-appearance"][data-appearance="${nextMode}"]`)?.focus());
+    return;
+  }
   if (event.key === "Enter" && event.target.closest("#auth-panel")) {
     event.preventDefault();
     submitAuthentication();
