@@ -6,8 +6,8 @@ const APPEARANCE_NAMES = { system: "自动", light: "浅色", dark: "深色" };
 const normalizeAppearanceMode = (value) => APPEARANCE_MODES.includes(String(value || "")) ? String(value) : "system";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260914.085111";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v125";
+const APP_VERSION = "v20260914.095632";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v128";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_UPDATE_TIMEOUT = 5_000;
@@ -1599,20 +1599,17 @@ function renderView(nextView) {
   const nextRect = nextLens.getBoundingClientRect();
   const deltaX = previousRect.left - nextRect.left;
   const deltaY = previousRect.top - nextRect.top;
-  const overshootX = (Math.sign(-deltaX) || 1) * 4;
-  nextLens.animate([
-    { transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scaleX(1) scaleY(1)`, filter: "brightness(1)" },
-    { offset: .18, transform: `translate3d(${deltaX * .72}px, ${deltaY * .72}px, 0) scaleX(1.08) scaleY(.96)`, filter: "brightness(1.09)" },
-    { offset: .58, transform: `translate3d(${deltaX * .18}px, ${deltaY * .18}px, 0) scaleX(1.12) scaleY(.94)`, filter: "brightness(1.12)" },
-    { offset: .82, transform: `translate3d(${overshootX}px, 0, 0) scaleX(.985) scaleY(1.018)`, filter: "brightness(1.04)" },
-    { transform: "translate3d(0, 0, 0) scaleX(1)", filter: "brightness(1)" }
-  ], { duration: 420, easing: "cubic-bezier(.2, .74, .18, 1)" });
-  const activeTab = app.querySelector(`.tabbar-compact button[data-view="${nextView}"]`);
-  activeTab?.animate([
-    { opacity: .62, filter: "saturate(.55)" },
-    { offset: .56, opacity: .72, filter: "saturate(.72)" },
-    { opacity: 1, filter: "saturate(1)" }
-  ], { duration: 420, easing: "ease-out" });
+  const overshootX = (Math.sign(-deltaX) || 1) * 3;
+  nextLens.style.willChange = "transform";
+  const motion = nextLens.animate([
+    { transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scaleX(1)` },
+    { offset: .28, transform: `translate3d(${deltaX * .48}px, ${deltaY * .48}px, 0) scaleX(1.05)` },
+    { offset: .78, transform: `translate3d(${overshootX}px, 0, 0) scaleX(.985)` },
+    { transform: "translate3d(0, 0, 0) scaleX(1)" }
+  ], { duration: 420, easing: "cubic-bezier(.22, .82, .18, 1)" });
+  motion.finished.catch(() => {}).finally(() => {
+    if (nextLens.isConnected) nextLens.style.willChange = "auto";
+  });
 }
 
 function render() {

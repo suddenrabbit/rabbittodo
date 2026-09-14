@@ -629,6 +629,21 @@ body.is-task-dragging {
   padding: 0;
 }
 
+.phone::before {
+  content: "";
+  grid-area: 1 / 1;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(720px 300px at 50% 100%, rgba(103, 88, 215, .14), transparent 68%),
+    radial-gradient(520px 240px at 0% 100%, rgba(103, 88, 215, .08), transparent 62%),
+    radial-gradient(480px 220px at 100% 100%, rgba(139, 126, 240, .07), transparent 60%);
+  background:
+    radial-gradient(720px 300px at 50% 100%, var(--page-wash-dock), transparent 68%),
+    radial-gradient(520px 240px at 0% 100%, var(--page-wash-side), transparent 62%),
+    radial-gradient(480px 220px at 100% 100%, var(--page-wash-side), transparent 60%);
+}
+
 .content-scroll {
   grid-area: 1 / 1;
   min-height: 0;
@@ -1296,6 +1311,7 @@ body.is-task-dragging {
 :root {
   --accent: #6758d7;
   --accent-strong: #5848c2;
+  --accent-highlight: #8b7ef0;
   --accent-soft: #eeebff;
   --accent-border: #cfc9ff;
   --accent-shadow: #6556d142;
@@ -1307,6 +1323,7 @@ body.is-task-dragging {
 :root[data-theme="mint"] {
   --accent: #4cb99f;
   --accent-strong: #257c68;
+  --accent-highlight: #6ed0b8;
   --accent-soft: #e4f7f1;
   --accent-border: #a9dfd2;
   --accent-shadow: #329a8140;
@@ -1318,6 +1335,7 @@ body.is-task-dragging {
 :root[data-theme="orange"] {
   --accent: #e99a45;
   --accent-strong: #a95e16;
+  --accent-highlight: #f0b15c;
   --accent-soft: #fff1df;
   --accent-border: #f1c58e;
   --accent-shadow: #d77b2740;
@@ -1329,6 +1347,7 @@ body.is-task-dragging {
 :root[data-theme="blue"] {
   --accent: #65a2d3;
   --accent-strong: #3578ae;
+  --accent-highlight: #7eb8e4;
   --accent-soft: #e8f3fb;
   --accent-border: #b7d7ed;
   --accent-shadow: #458bc040;
@@ -1340,6 +1359,7 @@ body.is-task-dragging {
 :root[data-theme="rose"] {
   --accent: #d96f9d;
   --accent-strong: #ad4775;
+  --accent-highlight: #e889b0;
   --accent-soft: #fceaf2;
   --accent-border: #edb7cf;
   --accent-shadow: #c6538740;
@@ -1459,19 +1479,17 @@ body.is-task-dragging {
   overflow: hidden;
   isolation: isolate;
   padding: 4px 6px 2px;
-  border: 1px solid transparent;
+  border: 1px solid var(--dock-glass-border);
   border-radius: 28px;
-  background: rgba(255, 255, 255, .12);
-  background:
-    linear-gradient(155deg, var(--dock-glass-light), var(--dock-glass-mid) 44%, var(--dock-glass-depth)) padding-box,
-    linear-gradient(145deg, var(--dock-edge-light) 0%, var(--dock-edge-mid) 46%, var(--dock-edge-depth) 100%) border-box;
+  background: rgba(255, 255, 255, .42);
+  background: linear-gradient(180deg, var(--dock-glass-light) 0%, var(--dock-glass-mid) 46%, var(--dock-glass-depth) 100%);
   box-shadow:
-    0 13px 32px var(--dock-shadow),
-    0 2px 7px var(--dock-shadow-close),
-    inset 0 1px 0 rgba(255, 255, 255, .24),
-    inset 0 -1px 0 var(--dock-inner-depth);
-  -webkit-backdrop-filter: blur(15px) saturate(185%) contrast(108%);
-  backdrop-filter: blur(15px) saturate(185%) contrast(108%);
+    0 12px 40px var(--dock-shadow),
+    0 2px 8px var(--dock-shadow-close),
+    inset 0 1px 0.5px var(--dock-specular),
+    inset 0 -0.5px 0 var(--dock-inner-depth);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  backdrop-filter: blur(28px) saturate(190%);
   transform: none;
 }
 
@@ -1479,25 +1497,14 @@ body.is-task-dragging {
   content: "";
   position: absolute;
   z-index: 0;
-  inset: 1px;
+  inset: 0;
   border-radius: inherit;
-  background:
-    radial-gradient(ellipse 72% 46% at 22% -8%, var(--dock-reflection) 0%, transparent 72%),
-    radial-gradient(ellipse 42% 34% at 88% 112%, var(--dock-caustic) 0%, transparent 78%);
+  background: linear-gradient(180deg, var(--dock-reflection) 0%, transparent 42%);
   pointer-events: none;
 }
 
 .tabbar.tabbar-compact::after {
-  content: "";
-  position: absolute;
-  z-index: 2;
-  inset: 1px;
-  border-radius: inherit;
-  box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, .18),
-    inset 1px 0 1px rgba(255, 255, 255, .09),
-    inset 0 -2px 3px var(--dock-inner-depth);
-  pointer-events: none;
+  content: none;
 }
 
 .tabbar-compact button {
@@ -1519,7 +1526,7 @@ body.is-task-dragging {
   isolation: isolate;
   border-radius: 22px;
   background: transparent;
-  transition: width .22s ease, color .22s ease, transform .16s ease;
+  transition: color .22s ease, transform .16s ease;
 }
 
 .tabbar-compact > button:not(.add-button).active {
@@ -1536,17 +1543,13 @@ body.is-task-dragging {
   bottom: 7px;
   left: 7px;
   width: calc(50% - 9px);
-  border: 1px solid var(--dock-selected-edge);
+  border: 0;
   border-radius: 22px;
-  background:
-    radial-gradient(ellipse 78% 58% at 30% 0%, var(--dock-selected-light), transparent 72%),
-    linear-gradient(155deg, var(--dock-selected-start), var(--dock-selected-end));
+  background: var(--dock-selected);
   box-shadow:
-    0 3px 10px var(--dock-selected-shadow),
-    inset 0 1px 0 var(--dock-selected-highlight),
-    inset 0 -1px 1px var(--dock-selected-depth);
+    0 2px 10px var(--dock-selected-shadow),
+    inset 0 1px 0 var(--dock-reflection);
   pointer-events: none;
-  will-change: transform;
 }
 
 .tabbar-compact.is-done-active .tabbar-selection { left: calc(50% + 1px); }
@@ -1573,60 +1576,35 @@ body.is-task-dragging {
   height: 56px;
   overflow: hidden;
   isolation: isolate;
-  border: 1px solid transparent;
+  border: 1px solid rgba(255, 255, 255, .55);
+  border: 1px solid color-mix(in srgb, #fff 55%, var(--accent-highlight, var(--accent)));
   border-radius: 50%;
   background: var(--accent-strong);
-  background:
-    radial-gradient(circle at 28% 18%, rgba(255, 255, 255, .44) 0%, rgba(255, 255, 255, .12) 18%, transparent 38%) padding-box,
-    radial-gradient(circle at 72% 82%, color-mix(in srgb, var(--accent-highlight, var(--accent)) 34%, transparent) 0%, transparent 46%) padding-box,
-    linear-gradient(145deg, color-mix(in srgb, var(--accent-highlight, var(--accent)) 54%, transparent), color-mix(in srgb, var(--accent-strong) 68%, transparent)) padding-box,
-    linear-gradient(145deg, rgba(255, 255, 255, .68), color-mix(in srgb, var(--accent-highlight, var(--accent)) 38%, transparent) 48%, color-mix(in srgb, var(--accent-gradient-end) 72%, transparent)) border-box;
-  /* 独立的主题色透光底层，避免浅色背景上的高光把按钮洗成无色。 */
-  background-color: color-mix(in srgb, var(--accent-strong) 62%, transparent);
+  background-color: color-mix(in srgb, var(--accent-strong) 48%, rgba(255, 255, 255, .28));
   color: #fff;
   box-shadow:
-    0 13px 30px color-mix(in srgb, var(--accent-shadow) 72%, transparent),
-    0 2px 7px var(--dock-shadow-close),
-    inset 0 1px 1px rgba(255, 255, 255, .34),
-    inset 0 -2px 4px color-mix(in srgb, var(--accent-gradient-end) 38%, transparent);
-  -webkit-backdrop-filter: blur(15px) saturate(190%) contrast(108%);
-  backdrop-filter: blur(15px) saturate(190%) contrast(108%);
+    0 12px 40px color-mix(in srgb, var(--accent-shadow) 72%, transparent),
+    0 2px 8px var(--dock-shadow-close),
+    inset 0 1px 0.5px var(--dock-specular),
+    inset 0 -0.5px 0 color-mix(in srgb, var(--accent-gradient-end) 28%, transparent);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  backdrop-filter: blur(28px) saturate(190%);
   transform: none;
-  transition: transform .18s cubic-bezier(.2, .8, .2, 1), box-shadow .18s ease, filter .18s ease;
+  transition: transform .18s cubic-bezier(.2, .8, .2, 1), box-shadow .18s ease;
 }
 
 .dock-cluster .add-button::before {
   content: "";
   position: absolute;
   z-index: 0;
-  width: 34px;
-  height: 18px;
-  top: 2px;
-  left: 7px;
-  border-radius: 50%;
-  background: radial-gradient(ellipse at center, rgba(255, 255, 255, .42), rgba(255, 255, 255, .08) 54%, transparent 74%);
-  filter: blur(.4px);
-  transform: rotate(-18deg);
-  transform-origin: center;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .45) 0%, transparent 42%);
   pointer-events: none;
-  transition: transform .18s ease, opacity .18s ease;
 }
 
 .dock-cluster .add-button::after {
-  content: "";
-  position: absolute;
-  z-index: 0;
-  right: 4px;
-  bottom: 5px;
-  width: 24px;
-  height: 14px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--accent-highlight) 42%, transparent);
-  filter: blur(6px);
-  opacity: .72;
-  transform: rotate(-22deg);
-  pointer-events: none;
-  transition: transform .18s ease, opacity .18s ease;
+  content: none;
 }
 
 .dock-cluster .add-button-icon {
@@ -1642,17 +1620,18 @@ body.is-task-dragging {
   transform: translateY(1px);
 }
 
+.dock-cluster .add-button:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 3px;
+}
+
 .dock-cluster .add-button:active {
   transform: scale(.955);
   box-shadow:
     0 7px 18px color-mix(in srgb, var(--accent-shadow) 64%, transparent),
     0 1px 3px var(--dock-shadow-close),
     inset 0 2px 5px color-mix(in srgb, var(--accent-gradient-end) 32%, transparent);
-  filter: saturate(1.08);
 }
-
-.dock-cluster .add-button:active::before { opacity: .78; transform: translate(2px, 2px) rotate(-14deg) scale(.94); }
-.dock-cluster .add-button:active::after { opacity: .88; transform: translate(-1px, -1px) rotate(-18deg) scale(1.08); }
 
 @media (orientation: portrait) {
   :root .content-scroll.content-scroll-tasks {
@@ -1784,24 +1763,19 @@ body.is-task-dragging {
   --ui-glass: rgba(255, 255, 255, .24);
   --ui-glass-line: rgba(255, 255, 255, .30);
   --ui-selected: rgba(118, 118, 128, .10);
-  --dock-glass-light: rgba(255, 255, 255, .21);
-  --dock-glass-mid: rgba(255, 255, 255, .055);
-  --dock-glass-depth: rgba(214, 217, 229, .10);
-  --dock-edge-light: rgba(255, 255, 255, .68);
-  --dock-edge-mid: rgba(255, 255, 255, .16);
-  --dock-edge-depth: rgba(139, 144, 163, .22);
-  --dock-reflection: rgba(255, 255, 255, .34);
-  --dock-caustic: rgba(166, 178, 213, .17);
-  --dock-inner-depth: rgba(71, 76, 96, .10);
-  --dock-shadow: rgba(38, 40, 51, .11);
-  --dock-shadow-close: rgba(38, 40, 51, .055);
-  --dock-selected-start: rgba(255, 255, 255, .24);
-  --dock-selected-end: rgba(139, 145, 166, .085);
-  --dock-selected-light: rgba(255, 255, 255, .32);
-  --dock-selected-edge: rgba(255, 255, 255, .23);
-  --dock-selected-highlight: rgba(255, 255, 255, .30);
-  --dock-selected-depth: rgba(70, 75, 94, .08);
-  --dock-selected-shadow: rgba(41, 43, 54, .065);
+  --dock-glass-light: rgba(255, 255, 255, .58);
+  --dock-glass-mid: rgba(255, 255, 255, .28);
+  --dock-glass-depth: rgba(245, 248, 255, .22);
+  --dock-glass-border: rgba(255, 255, 255, .62);
+  --dock-reflection: rgba(255, 255, 255, .50);
+  --dock-specular: rgba(255, 255, 255, .90);
+  --dock-inner-depth: rgba(120, 140, 180, .12);
+  --dock-shadow: rgba(30, 41, 80, .16);
+  --dock-shadow-close: rgba(30, 41, 80, .06);
+  --dock-selected: rgba(255, 255, 255, .86);
+  --dock-selected-shadow: rgba(30, 41, 80, .10);
+  --page-wash-dock: color-mix(in srgb, var(--accent) 16%, transparent);
+  --page-wash-side: color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
 
@@ -1823,24 +1797,19 @@ body.is-task-dragging {
     --ui-glass: rgba(35, 36, 43, .68);
     --ui-glass-line: rgba(255, 255, 255, .10);
     --ui-selected: rgba(255, 255, 255, .09);
-    --dock-glass-light: rgba(61, 65, 80, .34);
-    --dock-glass-mid: rgba(31, 34, 43, .20);
-    --dock-glass-depth: rgba(12, 14, 20, .27);
-    --dock-edge-light: rgba(255, 255, 255, .22);
-    --dock-edge-mid: rgba(255, 255, 255, .065);
-    --dock-edge-depth: rgba(0, 0, 0, .28);
-    --dock-reflection: rgba(255, 255, 255, .14);
-    --dock-caustic: rgba(104, 119, 164, .14);
-    --dock-inner-depth: rgba(0, 0, 0, .23);
-    --dock-shadow: rgba(0, 0, 0, .34);
-    --dock-shadow-close: rgba(0, 0, 0, .17);
-    --dock-selected-start: rgba(255, 255, 255, .115);
-    --dock-selected-end: rgba(255, 255, 255, .038);
-    --dock-selected-light: rgba(255, 255, 255, .15);
-    --dock-selected-edge: rgba(255, 255, 255, .095);
-    --dock-selected-highlight: rgba(255, 255, 255, .15);
-    --dock-selected-depth: rgba(0, 0, 0, .17);
-    --dock-selected-shadow: rgba(0, 0, 0, .18);
+    --dock-glass-light: rgba(48, 56, 78, .62);
+    --dock-glass-mid: rgba(28, 34, 50, .42);
+    --dock-glass-depth: rgba(18, 22, 34, .34);
+    --dock-glass-border: rgba(255, 255, 255, .14);
+    --dock-reflection: rgba(255, 255, 255, .16);
+    --dock-specular: rgba(255, 255, 255, .16);
+    --dock-inner-depth: rgba(0, 0, 0, .22);
+    --dock-shadow: rgba(0, 0, 0, .45);
+    --dock-shadow-close: rgba(0, 0, 0, .18);
+    --dock-selected: rgba(255, 255, 255, .14);
+    --dock-selected-shadow: rgba(0, 0, 0, .22);
+    --page-wash-dock: color-mix(in srgb, var(--accent) 22%, transparent);
+    --page-wash-side: color-mix(in srgb, var(--accent) 12%, transparent);
     --accent: #8f84f4;
     --accent-strong: #6e61d8;
     --accent-highlight: #aaa1ff;
@@ -2115,19 +2084,9 @@ body.is-task-dragging {
   }
 
 :root[data-color-scheme="dark"] .calendar-day.is-today { color: var(--accent-highlight); box-shadow: inset 0 0 0 1px var(--accent-border); }
-:root[data-color-scheme="dark"] .tabbar.tabbar-compact {
-    box-shadow:
-      0 14px 34px var(--dock-shadow),
-      0 2px 8px var(--dock-shadow-close),
-      inset 0 1px 0 rgba(255, 255, 255, .10),
-      inset 0 -1px 0 var(--dock-inner-depth);
-  }
 :root[data-color-scheme="dark"] .dock-cluster .add-button {
-    box-shadow:
-      0 14px 32px color-mix(in srgb, var(--accent-shadow) 76%, transparent),
-      0 2px 8px var(--dock-shadow-close),
-      inset 0 1px 1px rgba(255, 255, 255, .18),
-      inset 0 -2px 4px color-mix(in srgb, var(--accent-gradient-end) 48%, transparent);
+    background-color: color-mix(in srgb, var(--accent-strong) 58%, transparent);
+    border-color: color-mix(in srgb, #fff 22%, var(--accent-highlight, var(--accent)));
   }
 
 :root[data-color-scheme="dark"] .progress-card { box-shadow: 0 12px 28px rgba(0, 0, 0, .30); }
@@ -2143,9 +2102,37 @@ body.is-task-dragging {
 
 @media (prefers-reduced-motion: reduce) {
   .tabbar-compact > button:not(.add-button),
-  .dock-cluster .add-button,
-  .dock-cluster .add-button::before,
-  .dock-cluster .add-button::after { transition-duration: .01ms; }
+  .dock-cluster .add-button { transition-duration: .01ms; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .tabbar.tabbar-compact {
+    background: rgba(255, 255, 255, .94);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .tabbar.tabbar-compact::before { content: none; }
+  .dock-cluster .add-button {
+    background: var(--accent-strong);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .dock-cluster .add-button::before { content: none; }
+  :root[data-color-scheme="dark"] .tabbar.tabbar-compact {
+    background: rgba(32, 34, 42, .94);
+  }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .tabbar.tabbar-compact {
+    background: rgba(248, 248, 250, .92);
+  }
+  .dock-cluster .add-button {
+    background: var(--accent-strong);
+  }
+  :root[data-color-scheme="dark"] .tabbar.tabbar-compact {
+    background: rgba(32, 34, 42, .92);
+  }
 }
 
 @media (display-mode: standalone), (max-width: 520px) {
