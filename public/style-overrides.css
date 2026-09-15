@@ -998,7 +998,8 @@ body.is-task-dragging {
   text-align: center;
 }
 
-#status-bleed {
+#status-bleed,
+.phone > .status-bleed {
   display: none;
 }
 
@@ -1015,25 +1016,27 @@ body.is-task-dragging {
   }
 }
 
-/* iOS 27 主屏 PWA 会在 black-translucent 顶部叠一层系统渐进模糊；用实色条填满该区域，标题再让出模糊尾。 */
-@supports (-webkit-touch-callout: none) {
-  @media (display-mode: standalone) and (any-pointer: coarse) {
-    :root {
-      --status-fade: 16px;
-    }
+/* iOS 主屏 PWA：用 navigator.standalone 打开实色顶条，避开 iOS 27 系统顶模糊。 */
+html[data-pwa="standalone"] {
+  --status-fade: 32px;
+}
 
-    #status-bleed {
-      display: block;
-      position: fixed;
-      top: 0;
-      right: 0;
-      left: 0;
-      z-index: 50;
-      height: calc(env(safe-area-inset-top, 0px) + var(--status-fade));
-      background-color: var(--ui-page);
-      pointer-events: none;
-    }
-  }
+html[data-pwa="standalone"] #status-bleed,
+html[data-pwa="standalone"] .phone > .status-bleed {
+  display: block;
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 8;
+  height: calc(env(safe-area-inset-top, 0px) + var(--status-fade));
+  background-color: var(--ui-page);
+  pointer-events: none;
+}
+
+html[data-pwa="standalone"] #status-bleed {
+  position: fixed;
+  z-index: 50;
 }
 
 @media (max-width: 520px) {

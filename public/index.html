@@ -29,6 +29,11 @@
       try { stored = localStorage.getItem(key) || "system"; } catch {}
       window.RabbitToDoAppearance = { apply, current: () => normalize(root.dataset.appearanceMode) };
       apply(stored);
+      const standaloneMode = window.matchMedia("(display-mode: standalone)").matches
+        || window.matchMedia("(display-mode: fullscreen)").matches;
+      if ("standalone" in window.navigator && (window.navigator.standalone || standaloneMode)) {
+        root.dataset.pwa = "standalone";
+      }
       const followSystem = () => {
         if (root.dataset.appearanceMode === "system") apply("system");
       };
@@ -50,6 +55,18 @@
     html, body { margin: 0; min-height: 100%; background: #f8f8fa; }
     html[data-color-scheme="dark"],
     html[data-color-scheme="dark"] body { background: #14151a; }
+    #status-bleed { display: none; }
+    html[data-pwa="standalone"] { --status-fade: 32px; }
+    html[data-pwa="standalone"] #status-bleed {
+      display: block;
+      position: fixed;
+      top: 0; right: 0; left: 0;
+      z-index: 50;
+      height: calc(env(safe-area-inset-top, 0px) + 32px);
+      background: #f8f8fa;
+      pointer-events: none;
+    }
+    html[data-pwa="standalone"][data-color-scheme="dark"] #status-bleed { background: #14151a; }
   </style>
   <link rel="stylesheet" href="/style.css" />
   <link rel="stylesheet" href="/style-overrides.css" />

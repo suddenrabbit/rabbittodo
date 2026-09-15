@@ -6,8 +6,8 @@ const APPEARANCE_NAMES = { system: "自动", light: "浅色", dark: "深色" };
 const normalizeAppearanceMode = (value) => APPEARANCE_MODES.includes(String(value || "")) ? String(value) : "system";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260915.214816";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v129";
+const APP_VERSION = "v20260915.215757";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v130";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_UPDATE_TIMEOUT = 5_000;
@@ -1628,7 +1628,7 @@ function render() {
   const tabbarHasAddButton = state.view !== "profile";
   const todoIsActive = state.view === "todo";
   const doneIsActive = state.view === "done";
-  app.innerHTML = `<section class="phone"><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
+  app.innerHTML = `<section class="phone"><div class="status-bleed" aria-hidden="true"></div><div class="content-scroll ${state.view === "profile" ? "content-scroll-profile" : "content-scroll-tasks"}">${pageContent}</div>
     <div class="dock-layer ${tabbarHasAddButton ? "dock-layer-tasks" : "dock-layer-profile"}"><div class="dock-cluster ${tabbarHasAddButton ? "dock-cluster-has-add" : ""}"><nav class="tabbar tabbar-compact ${doneIsActive ? "is-done-active" : "is-todo-active"}" aria-label="主导航">${todoIsActive || doneIsActive ? '<i class="tabbar-selection" aria-hidden="true"></i>' : ""}<button data-action="view" data-view="todo" class="${todoIsActive ? "active" : ""}" ${todoIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">☐</span>待办</button><button data-action="view" data-view="done" class="${doneIsActive ? "active" : ""}" ${doneIsActive ? 'aria-current="page"' : ""}><span aria-hidden="true">✓</span>已办</button></nav>${tabbarHasAddButton ? '<button class="add-button" data-action="add" aria-label="添加事项"><span class="add-button-icon" aria-hidden="true">+</span></button>' : ""}</div></div></section>${editor()}${datePicker()}${reminderPicker()}${identityGate()}`;
   const nextAvatar = app.querySelector(".avatar");
   if (persistentAvatar && nextAvatar && persistentAvatar !== nextAvatar) {
