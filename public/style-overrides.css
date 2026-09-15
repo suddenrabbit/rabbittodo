@@ -1017,7 +1017,7 @@ body.is-task-dragging {
 }
 
 html[data-pwa="standalone"] {
-  --status-fade: 12px;
+  --status-fade: 16px;
 }
 
 html[data-pwa="standalone"] #status-bleed,
