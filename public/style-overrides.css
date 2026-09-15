@@ -998,10 +998,6 @@ body.is-task-dragging {
   text-align: center;
 }
 
-#status-bleed {
-  display: none;
-}
-
 @media (display-mode: standalone) {
   .phone {
     --dock-bottom-gap: calc(env(safe-area-inset-bottom) + 6px);
@@ -1013,18 +1009,6 @@ body.is-task-dragging {
   .phone {
     background: #f8f8fa;
   }
-}
-
-html[data-pwa="standalone"] #status-bleed {
-  display: block;
-  position: fixed;
-  top: 0;
-  right: 0;
-  left: 0;
-  z-index: 50;
-  height: env(safe-area-inset-top, 0px);
-  background-color: var(--ui-page);
-  pointer-events: none;
 }
 
 @media (max-width: 520px) {
@@ -1686,25 +1670,6 @@ html[data-pwa="standalone"] #status-bleed {
   :root.is-ipad .dock-layer-tasks {
     padding-right: clamp(32px, 6vw, 88px);
     padding-left: clamp(32px, 6vw, 88px);
-  }
-}
-
-/* WebKit 触屏主屏应用的 svh/dvh 会重复扣除安全区，使用包含安全区的 vh。 */
-@supports (-webkit-touch-callout: none) {
-  @media (display-mode: standalone) and (any-pointer: coarse) {
-    html,
-    body {
-      height: 100vh;
-      min-height: 100vh;
-      overflow: hidden;
-    }
-
-    .app-shell,
-    .phone {
-      height: 100vh;
-      min-height: 100vh;
-      max-height: 100vh;
-    }
   }
 }
 

@@ -29,9 +29,6 @@
       try { stored = localStorage.getItem(key) || "system"; } catch {}
       window.RabbitToDoAppearance = { apply, current: () => normalize(root.dataset.appearanceMode) };
       apply(stored);
-      if (window.navigator.standalone === true) {
-        root.dataset.pwa = "standalone";
-      }
       const followSystem = () => {
         if (root.dataset.appearanceMode === "system") apply("system");
       };
@@ -43,7 +40,7 @@
     })();
   </script>
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="RabbitToDo" />
   <title>RabbitToDo</title>
   <link rel="manifest" href="/manifest.webmanifest" />
@@ -58,7 +55,6 @@
   <link rel="stylesheet" href="/style-overrides.css" />
 </head>
 <body>
-  <div id="status-bleed" aria-hidden="true"></div>
   <main id="app" class="app-shell"></main>
   <script src="/app.js" defer></script>
 </body>
