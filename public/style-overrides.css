@@ -1016,9 +1016,8 @@ body.is-task-dragging {
   }
 }
 
-/* iOS 主屏 PWA：用 navigator.standalone 打开实色顶条，避开 iOS 27 系统顶模糊。 */
 html[data-pwa="standalone"] {
-  --status-fade: 32px;
+  --status-fade: 12px;
 }
 
 html[data-pwa="standalone"] #status-bleed,
@@ -1066,7 +1065,7 @@ html[data-pwa="standalone"] #status-bleed {
   }
 
   .content-scroll {
-    padding-top: calc(env(safe-area-inset-top) + var(--status-fade) + 24px);
+    padding-top: calc(env(safe-area-inset-top) + var(--status-fade, 0px) + 24px);
     padding-right: max(20px, env(safe-area-inset-right));
     padding-left: max(20px, env(safe-area-inset-left));
   }
@@ -1101,7 +1100,7 @@ html[data-pwa="standalone"] #status-bleed {
 }
 
 :root.is-ipad .content-scroll {
-  padding: calc(max(42px, env(safe-area-inset-top)) + var(--status-fade)) clamp(32px, 7vw, 88px) 36px;
+  padding: calc(max(42px, env(safe-area-inset-top)) + var(--status-fade, 0px)) clamp(32px, 7vw, 88px) 36px;
 }
 
 :root.is-ipad .workspace,
@@ -1144,7 +1143,7 @@ html[data-pwa="standalone"] #status-bleed {
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll {
-    padding: calc(max(14px, env(safe-area-inset-top)) + var(--status-fade)) max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    padding: calc(max(14px, env(safe-area-inset-top)) + var(--status-fade, 0px)) max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll.content-scroll-tasks {
@@ -1257,7 +1256,7 @@ html[data-pwa="standalone"] #status-bleed {
 @media (orientation: portrait) {
   :root .content-scroll.content-scroll-tasks,
   :root .content-scroll.content-scroll-profile {
-    padding-top: calc(max(14px, env(safe-area-inset-top)) + var(--status-fade));
+    padding-top: calc(max(14px, env(safe-area-inset-top)) + var(--status-fade, 0px));
   }
 
   :root .content-scroll.content-scroll-tasks {
