@@ -998,6 +998,17 @@ body.is-task-dragging {
   text-align: center;
 }
 
+#top-edge-guard {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: max(env(safe-area-inset-top, 0px), 1px);
+  z-index: 40;
+  background-color: var(--ui-page);
+  pointer-events: none;
+}
+
 @media (display-mode: standalone) {
   .phone {
     --dock-bottom-gap: calc(env(safe-area-inset-bottom) + 6px);
@@ -1073,7 +1084,13 @@ body.is-task-dragging {
 }
 
 :root.is-ipad .content-scroll {
-  padding: max(42px, env(safe-area-inset-top)) clamp(32px, 7vw, 88px) 36px;
+  padding: 0 clamp(32px, 7vw, 88px) 36px;
+}
+
+:root.is-ipad .workspace-overview,
+:root.is-ipad .content-scroll-profile .topbar {
+  background-color: var(--ui-page);
+  padding-top: max(42px, env(safe-area-inset-top));
 }
 
 :root.is-ipad .workspace,
@@ -1116,7 +1133,13 @@ body.is-task-dragging {
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll {
-    padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    padding: 0 max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+
+  :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview,
+  :root:is(.is-touch-device, .is-compact-landscape) .content-scroll-profile .topbar {
+    background-color: var(--ui-page);
+    padding-top: max(14px, env(safe-area-inset-top));
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll.content-scroll-tasks {
@@ -1229,6 +1252,12 @@ body.is-task-dragging {
 @media (orientation: portrait) {
   :root .content-scroll.content-scroll-tasks,
   :root .content-scroll.content-scroll-profile {
+    padding-top: 0;
+  }
+
+  :root .content-scroll-tasks .workspace-overview,
+  :root .content-scroll-profile .topbar {
+    background-color: var(--ui-page);
     padding-top: max(14px, env(safe-area-inset-top));
   }
 
@@ -1670,6 +1699,25 @@ body.is-task-dragging {
   :root.is-ipad .dock-layer-tasks {
     padding-right: clamp(32px, 6vw, 88px);
     padding-left: clamp(32px, 6vw, 88px);
+  }
+}
+
+/* WebKit 触屏主屏应用的 svh/dvh 会重复扣除安全区，使用包含安全区的 vh。 */
+@supports (-webkit-touch-callout: none) {
+  @media (display-mode: standalone) and (any-pointer: coarse) {
+    html,
+    body {
+      height: 100vh;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    .app-shell,
+    .phone {
+      height: 100vh;
+      min-height: 100vh;
+      max-height: 100vh;
+    }
   }
 }
 
