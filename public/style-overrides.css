@@ -998,6 +998,10 @@ body.is-task-dragging {
   text-align: center;
 }
 
+#status-bleed {
+  display: none;
+}
+
 @media (display-mode: standalone) {
   .phone {
     --dock-bottom-gap: calc(env(safe-area-inset-bottom) + 6px);
@@ -1008,6 +1012,27 @@ body.is-task-dragging {
   .app-shell,
   .phone {
     background: #f8f8fa;
+  }
+}
+
+/* iOS 27 主屏 PWA 会在 black-translucent 顶部叠一层系统渐进模糊；用实色条填满该区域，标题再让出模糊尾。 */
+@supports (-webkit-touch-callout: none) {
+  @media (display-mode: standalone) and (any-pointer: coarse) {
+    :root {
+      --status-fade: 16px;
+    }
+
+    #status-bleed {
+      display: block;
+      position: fixed;
+      top: 0;
+      right: 0;
+      left: 0;
+      z-index: 50;
+      height: calc(env(safe-area-inset-top, 0px) + var(--status-fade));
+      background-color: var(--ui-page);
+      pointer-events: none;
+    }
   }
 }
 
@@ -1038,7 +1063,7 @@ body.is-task-dragging {
   }
 
   .content-scroll {
-    padding-top: calc(env(safe-area-inset-top) + 24px);
+    padding-top: calc(env(safe-area-inset-top) + var(--status-fade) + 24px);
     padding-right: max(20px, env(safe-area-inset-right));
     padding-left: max(20px, env(safe-area-inset-left));
   }
@@ -1073,7 +1098,7 @@ body.is-task-dragging {
 }
 
 :root.is-ipad .content-scroll {
-  padding: max(42px, env(safe-area-inset-top)) clamp(32px, 7vw, 88px) 36px;
+  padding: calc(max(42px, env(safe-area-inset-top)) + var(--status-fade)) clamp(32px, 7vw, 88px) 36px;
 }
 
 :root.is-ipad .workspace,
@@ -1116,7 +1141,7 @@ body.is-task-dragging {
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll {
-    padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    padding: calc(max(14px, env(safe-area-inset-top)) + var(--status-fade)) max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll.content-scroll-tasks {
@@ -1229,7 +1254,7 @@ body.is-task-dragging {
 @media (orientation: portrait) {
   :root .content-scroll.content-scroll-tasks,
   :root .content-scroll.content-scroll-profile {
-    padding-top: max(14px, env(safe-area-inset-top));
+    padding-top: calc(max(14px, env(safe-area-inset-top)) + var(--status-fade));
   }
 
   :root .content-scroll.content-scroll-tasks {
@@ -1776,6 +1801,7 @@ body.is-task-dragging {
   --dock-selected-shadow: rgba(30, 41, 80, .10);
   --page-wash-dock: color-mix(in srgb, var(--accent) 16%, transparent);
   --page-wash-side: color-mix(in srgb, var(--accent) 9%, transparent);
+  --status-fade: 0px;
 }
 
 
