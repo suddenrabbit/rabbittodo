@@ -998,8 +998,7 @@ body.is-task-dragging {
   text-align: center;
 }
 
-#status-bleed,
-.phone > .status-bleed {
+#status-bleed {
   display: none;
 }
 
@@ -1016,26 +1015,16 @@ body.is-task-dragging {
   }
 }
 
-html[data-pwa="standalone"] {
-  --status-fade: 16px;
-}
-
-html[data-pwa="standalone"] #status-bleed,
-html[data-pwa="standalone"] .phone > .status-bleed {
+html[data-pwa="standalone"] #status-bleed {
   display: block;
-  position: absolute;
+  position: fixed;
   top: 0;
   right: 0;
   left: 0;
-  z-index: 8;
-  height: calc(env(safe-area-inset-top, 0px) + var(--status-fade));
+  z-index: 50;
+  height: env(safe-area-inset-top, 0px);
   background-color: var(--ui-page);
   pointer-events: none;
-}
-
-html[data-pwa="standalone"] #status-bleed {
-  position: fixed;
-  z-index: 50;
 }
 
 @media (max-width: 520px) {
@@ -1065,7 +1054,7 @@ html[data-pwa="standalone"] #status-bleed {
   }
 
   .content-scroll {
-    padding-top: calc(env(safe-area-inset-top) + var(--status-fade, 0px) + 24px);
+    padding-top: calc(env(safe-area-inset-top) + 24px);
     padding-right: max(20px, env(safe-area-inset-right));
     padding-left: max(20px, env(safe-area-inset-left));
   }
@@ -1100,7 +1089,7 @@ html[data-pwa="standalone"] #status-bleed {
 }
 
 :root.is-ipad .content-scroll {
-  padding: calc(max(42px, env(safe-area-inset-top)) + var(--status-fade, 0px)) clamp(32px, 7vw, 88px) 36px;
+  padding: max(42px, env(safe-area-inset-top)) clamp(32px, 7vw, 88px) 36px;
 }
 
 :root.is-ipad .workspace,
@@ -1143,7 +1132,7 @@ html[data-pwa="standalone"] #status-bleed {
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll {
-    padding: calc(max(14px, env(safe-area-inset-top)) + var(--status-fade, 0px)) max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll.content-scroll-tasks {
@@ -1256,7 +1245,7 @@ html[data-pwa="standalone"] #status-bleed {
 @media (orientation: portrait) {
   :root .content-scroll.content-scroll-tasks,
   :root .content-scroll.content-scroll-profile {
-    padding-top: calc(max(14px, env(safe-area-inset-top)) + var(--status-fade, 0px));
+    padding-top: max(14px, env(safe-area-inset-top));
   }
 
   :root .content-scroll.content-scroll-tasks {
@@ -1803,7 +1792,6 @@ html[data-pwa="standalone"] #status-bleed {
   --dock-selected-shadow: rgba(30, 41, 80, .10);
   --page-wash-dock: color-mix(in srgb, var(--accent) 16%, transparent);
   --page-wash-side: color-mix(in srgb, var(--accent) 9%, transparent);
-  --status-fade: 0px;
 }
 
 
