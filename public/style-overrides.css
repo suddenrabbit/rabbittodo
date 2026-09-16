@@ -1090,7 +1090,7 @@ body.is-task-dragging {
 :root.is-ipad .workspace-overview,
 :root.is-ipad .content-scroll-profile .topbar {
   background-color: var(--ui-page);
-  padding-top: max(42px, env(safe-area-inset-top));
+  padding-top: max(42px, calc(env(safe-area-inset-top, 0px) + var(--apple-home-top-clearance, 0px)));
 }
 
 :root.is-ipad .workspace,
@@ -1139,7 +1139,7 @@ body.is-task-dragging {
   :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview,
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll-profile .topbar {
     background-color: var(--ui-page);
-    padding-top: max(14px, env(safe-area-inset-top));
+    padding-top: max(14px, calc(env(safe-area-inset-top, 0px) + var(--apple-home-top-clearance, 0px)));
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll.content-scroll-tasks {
@@ -1258,7 +1258,7 @@ body.is-task-dragging {
   :root .content-scroll-tasks .workspace-overview,
   :root .content-scroll-profile .topbar {
     background-color: var(--ui-page);
-    padding-top: max(14px, env(safe-area-inset-top));
+    padding-top: max(14px, calc(env(safe-area-inset-top, 0px) + var(--apple-home-top-clearance, 0px)));
   }
 
   :root .content-scroll.content-scroll-tasks {
@@ -1705,6 +1705,13 @@ body.is-task-dragging {
 /* WebKit 触屏主屏应用的 svh/dvh 会重复扣除安全区，使用包含安全区的 vh。 */
 @supports (-webkit-touch-callout: none) {
   @media (display-mode: standalone) and (any-pointer: coarse) {
+    /* Native scroll-edge blur can extend below the safe area. Reserve space
+       once on task/profile headers; this does not disable the system effect.
+       Keep iPad's minimum inset and the iOS 26 viewport-height workaround. */
+    :root {
+      --apple-home-top-clearance: 20px;
+    }
+
     html,
     body {
       height: 100vh;
