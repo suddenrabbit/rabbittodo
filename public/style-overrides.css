@@ -575,7 +575,7 @@ body.is-task-dragging {
 
 .date-picker-sheet {
   width: min(100%, 430px);
-  padding: 10px 20px calc(24px + env(safe-area-inset-bottom));
+  padding: 10px 20px calc(24px + var(--app-safe-bottom));
   border-radius: 27px;
   background: #fbfbfd;
   box-shadow: 0 -8px 32px #1110182e;
@@ -604,7 +604,6 @@ body.is-task-dragging {
 .calendar-day.is-empty { pointer-events: none; }
 .calendar-shortcuts { display: flex; gap: 8px; margin-top: 18px; }
 .calendar-shortcuts button { flex: 1; padding: 10px; border-radius: 11px; background: #eeebff; color: #6253cd; font-size: 13px; font-weight: 700; }
-}
 
 @media (max-width: 520px) {
   .composer > textarea,
@@ -615,12 +614,30 @@ body.is-task-dragging {
 }
 
 /* The content and floating dock share one grid cell, so the dock overlays without leaving layout flow. */
+:root {
+  --app-safe-top: env(safe-area-inset-top, 0px);
+  --app-safe-right: env(safe-area-inset-right, 0px);
+  --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --app-safe-left: env(safe-area-inset-left, 0px);
+  --app-top-spacing: 14px;
+  --app-top-content-padding: calc(var(--app-safe-top) + var(--app-top-spacing));
+  --app-viewport-height: 100vh;
+}
+
+@supports (height: 100svh) {
+  :root { --app-viewport-height: 100svh; }
+}
+
+@supports (height: 100dvh) {
+  :root { --app-viewport-height: 100dvh; }
+}
+
 .phone {
   --dock-bottom-gap: 6px;
   --overview-track: minmax(226px, .8fr);
   --task-track: minmax(0, 1.7fr);
   --workspace-gap: 16px;
-  height: min(780px, calc(100svh - 48px));
+  height: min(780px, calc(var(--app-viewport-height) - 48px));
   min-height: 0;
   max-height: none;
   display: grid;
@@ -998,20 +1015,9 @@ body.is-task-dragging {
   text-align: center;
 }
 
-#top-edge-guard {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: max(env(safe-area-inset-top, 0px), 1px);
-  z-index: 40;
-  background-color: var(--ui-page);
-  pointer-events: none;
-}
-
 @media (display-mode: standalone) {
   .phone {
-    --dock-bottom-gap: calc(env(safe-area-inset-bottom) + 6px);
+    --dock-bottom-gap: calc(var(--app-safe-bottom) + 6px);
   }
 
   html,
@@ -1031,44 +1037,45 @@ body.is-task-dragging {
   }
 
   .app-shell {
-    height: 100svh;
-    height: 100dvh;
-    min-height: 100svh;
-    min-height: 100dvh;
+    height: var(--app-viewport-height);
+    min-height: var(--app-viewport-height);
     padding: 0;
   }
 
   .phone {
-    height: 100svh;
-    height: 100dvh;
-    min-height: 100svh;
-    min-height: 100dvh;
-    max-height: 100svh;
-    max-height: 100dvh;
+    height: var(--app-viewport-height);
+    min-height: var(--app-viewport-height);
+    max-height: var(--app-viewport-height);
     padding: 0;
   }
 
   .content-scroll {
-    padding-top: calc(env(safe-area-inset-top) + 24px);
-    padding-right: max(20px, env(safe-area-inset-right));
-    padding-left: max(20px, env(safe-area-inset-left));
+    padding-top: calc(var(--app-safe-top) + 24px);
+    padding-right: max(20px, var(--app-safe-right));
+    padding-left: max(20px, var(--app-safe-left));
   }
 
   .tabbar {
-    height: calc(84px + env(safe-area-inset-bottom));
-    flex-basis: calc(84px + env(safe-area-inset-bottom));
-    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(84px + var(--app-safe-bottom));
+    flex-basis: calc(84px + var(--app-safe-bottom));
+    padding-bottom: var(--app-safe-bottom);
   }
 
   .add-button {
-    bottom: calc(48px + env(safe-area-inset-bottom));
+    bottom: calc(48px + var(--app-safe-bottom));
   }
 }
 
 /* iPad always uses the full app window, including portrait mode. */
 :root.is-ipad .app-shell {
   align-items: stretch;
+  height: var(--app-viewport-height);
+  min-height: var(--app-viewport-height);
   padding: 0;
+}
+
+:root.is-ipad {
+  --app-top-content-padding: max(42px, calc(var(--app-safe-top) + var(--app-top-spacing)));
 }
 
 :root.is-ipad .phone {
@@ -1076,9 +1083,9 @@ body.is-task-dragging {
   --task-track: minmax(0, 1fr);
   --workspace-gap: 24px;
   width: 100%;
-  height: 100svh;
-  min-height: 100svh;
-  max-height: 100svh;
+  height: var(--app-viewport-height);
+  min-height: var(--app-viewport-height);
+  max-height: var(--app-viewport-height);
   border-radius: 0;
   box-shadow: none;
 }
@@ -1090,7 +1097,7 @@ body.is-task-dragging {
 :root.is-ipad .workspace-overview,
 :root.is-ipad .content-scroll-profile .topbar {
   background-color: var(--ui-page);
-  padding-top: max(42px, calc(env(safe-area-inset-top, 0px) + var(--apple-home-top-clearance, 0px)));
+  padding-top: var(--app-top-content-padding);
 }
 
 :root.is-ipad .workspace,
@@ -1117,29 +1124,28 @@ body.is-task-dragging {
 @media (orientation: landscape) {
   :root:is(.is-touch-device, .is-compact-landscape) .app-shell {
     align-items: stretch;
+    height: var(--app-viewport-height);
+    min-height: var(--app-viewport-height);
     padding: 0;
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .phone {
     width: 100%;
-    height: 100svh;
-    height: 100dvh;
-    min-height: 100svh;
-    min-height: 100dvh;
-    max-height: 100svh;
-    max-height: 100dvh;
+    height: var(--app-viewport-height);
+    min-height: var(--app-viewport-height);
+    max-height: var(--app-viewport-height);
     border-radius: 0;
     box-shadow: none;
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll {
-    padding: 0 max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    padding: var(--app-top-content-padding) max(16px, var(--app-safe-right)) max(18px, var(--app-safe-bottom)) max(16px, var(--app-safe-left));
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .workspace-overview,
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll-profile .topbar {
     background-color: var(--ui-page);
-    padding-top: max(14px, calc(env(safe-area-inset-top, 0px) + var(--apple-home-top-clearance, 0px)));
+    padding-top: 0;
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll.content-scroll-tasks {
@@ -1222,7 +1228,7 @@ body.is-task-dragging {
 
   :root:is(.is-touch-device, .is-compact-landscape) .composer {
     width: min(100%, 600px);
-    max-height: calc(100svh - 24px);
+    max-height: calc(var(--app-viewport-height) - 24px);
     overflow-y: auto;
     border-radius: 24px;
   }
@@ -1258,7 +1264,7 @@ body.is-task-dragging {
   :root .content-scroll-tasks .workspace-overview,
   :root .content-scroll-profile .topbar {
     background-color: var(--ui-page);
-    padding-top: max(14px, calc(env(safe-area-inset-top, 0px) + var(--apple-home-top-clearance, 0px)));
+    padding-top: var(--app-top-content-padding);
   }
 
   :root .content-scroll.content-scroll-tasks {
@@ -1460,8 +1466,8 @@ body.is-task-dragging {
 /* 2.6 紧凑悬浮胶囊底栏：列表延伸到底栏背后，末尾仍可完整滚出遮挡区。 */
 :root .content-scroll.content-scroll-tasks,
 :root .content-scroll.content-scroll-profile {
-  padding-bottom: calc(74px + env(safe-area-inset-bottom));
-  scroll-padding-bottom: calc(74px + env(safe-area-inset-bottom));
+  padding-bottom: calc(74px + var(--app-safe-bottom));
+  scroll-padding-bottom: calc(74px + var(--app-safe-bottom));
 }
 
 .dock-layer {
@@ -1669,8 +1675,8 @@ body.is-task-dragging {
   }
 
   :root .content-scroll-tasks .workspace-tasks {
-    padding-bottom: calc(74px + env(safe-area-inset-bottom));
-    scroll-padding-bottom: calc(74px + env(safe-area-inset-bottom));
+    padding-bottom: calc(74px + var(--app-safe-bottom));
+    scroll-padding-bottom: calc(74px + var(--app-safe-bottom));
   }
 }
 
@@ -1681,15 +1687,15 @@ body.is-task-dragging {
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .content-scroll-tasks .workspace-tasks {
-    padding-bottom: calc(74px + env(safe-area-inset-bottom));
-    scroll-padding-bottom: calc(74px + env(safe-area-inset-bottom));
+    padding-bottom: calc(74px + var(--app-safe-bottom));
+    scroll-padding-bottom: calc(74px + var(--app-safe-bottom));
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .dock-layer-tasks {
     grid-template-columns: var(--overview-track) var(--task-track);
     gap: var(--workspace-gap);
-    padding-right: max(16px, env(safe-area-inset-right));
-    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, var(--app-safe-right));
+    padding-left: max(16px, var(--app-safe-left));
   }
 
   :root:is(.is-touch-device, .is-compact-landscape) .dock-layer-tasks .dock-cluster {
@@ -1706,24 +1712,25 @@ body.is-task-dragging {
 @supports (-webkit-touch-callout: none) {
   @media (display-mode: standalone) and (any-pointer: coarse) {
     /* Native scroll-edge blur can extend below the safe area. Reserve space
-       once on task/profile headers; this does not disable the system effect.
+       once on the shared content container; this does not disable the system effect.
        Keep iPad's minimum inset and the iOS 26 viewport-height workaround. */
     :root {
-      --apple-home-top-clearance: 20px;
+      --app-top-spacing: 20px;
+      --app-viewport-height: 100vh;
     }
 
     html,
     body {
-      height: 100vh;
-      min-height: 100vh;
+      height: var(--app-viewport-height);
+      min-height: var(--app-viewport-height);
       overflow: hidden;
     }
 
     .app-shell,
     .phone {
-      height: 100vh;
-      min-height: 100vh;
-      max-height: 100vh;
+      height: var(--app-viewport-height);
+      min-height: var(--app-viewport-height);
+      max-height: var(--app-viewport-height);
     }
   }
 }
