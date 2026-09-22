@@ -1673,27 +1673,36 @@ body.is-task-dragging {
   }
 }
 
-/* WebKit 触屏主屏应用：旧版 dvh 会扣掉安全区，而新版可能把网页层移到
-   状态栏下方却仍让 100vh 覆盖整屏。用动态视口加回实际安全区，兼容两种模型。 */
+/* 安全区只负责内容与 dock 的内边距，不参与容器高度。默认使用可见动态视口；
+   仅在运行时测得旧 WebKit 确实从 dvh 重复扣除了完整安全区时回退到 100vh。 */
 @supports (-webkit-touch-callout: none) {
   @media (display-mode: standalone) and (any-pointer: coarse) {
     html,
     body {
       height: 100vh;
-      height: calc(100dvh + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
+      height: 100dvh;
       min-height: 100vh;
-      min-height: calc(100dvh + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
+      min-height: 100dvh;
       overflow: hidden;
     }
 
     .app-shell,
     .phone {
       height: 100vh;
-      height: calc(100dvh + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
+      height: 100dvh;
       min-height: 100vh;
-      min-height: calc(100dvh + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
+      min-height: 100dvh;
       max-height: 100vh;
-      max-height: calc(100dvh + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
+      max-height: 100dvh;
+    }
+
+    :root.uses-legacy-standalone-vh,
+    :root.uses-legacy-standalone-vh body,
+    :root.uses-legacy-standalone-vh .app-shell,
+    :root.uses-legacy-standalone-vh .phone {
+      height: 100vh;
+      min-height: 100vh;
+      max-height: 100vh;
     }
   }
 }

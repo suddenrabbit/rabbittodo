@@ -6,8 +6,8 @@ const APPEARANCE_NAMES = { system: "自动", light: "浅色", dark: "深色" };
 const normalizeAppearanceMode = (value) => APPEARANCE_MODES.includes(String(value || "")) ? String(value) : "system";
 const SORT_MODES = ["manual", "auto"];
 const normalizeTaskSortMode = (value) => SORT_MODES.includes(String(value || "")) ? String(value) : "manual";
-const APP_VERSION = "v20260922.094011";
-const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v140";
+const APP_VERSION = "v20260922.110550";
+const EXPECTED_SERVICE_WORKER_VERSION = "rabbittodo-v141";
 const SERVICE_WORKER_CHECK_INTERVAL = 10 * 60 * 1_000;
 const SERVICE_WORKER_RETRY_INTERVAL = 5 * 60 * 1_000;
 const SERVICE_WORKER_UPDATE_TIMEOUT = 5_000;
@@ -26,6 +26,38 @@ const app = document.querySelector("#app");
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 document.documentElement.classList.toggle("is-ipad", isIPad);
 document.documentElement.classList.toggle("is-touch-device", navigator.maxTouchPoints > 0 || matchMedia("(pointer: coarse)").matches);
+const standaloneDisplayQuery = matchMedia("(display-mode: standalone)");
+let standaloneViewportModelFrame = 0;
+const updateStandaloneViewportModel = () => {
+  cancelAnimationFrame(standaloneViewportModelFrame);
+  standaloneViewportModelFrame = requestAnimationFrame(() => {
+    const root = document.documentElement;
+    root.classList.remove("uses-legacy-standalone-vh");
+    if (!standaloneDisplayQuery.matches || !matchMedia("(any-pointer: coarse)").matches || !CSS.supports("height", "100dvh")) return;
+
+    const probe = document.createElement("div");
+    probe.setAttribute("aria-hidden", "true");
+    probe.style.cssText = "position:fixed;visibility:hidden;pointer-events:none;box-sizing:content-box;width:0;height:100vh;padding:0;top:0;left:0;";
+    document.body.append(probe);
+    const vhHeight = probe.getBoundingClientRect().height;
+    probe.style.height = "100dvh";
+    const dvhHeight = probe.getBoundingClientRect().height;
+    probe.style.height = "0";
+    probe.style.paddingTop = "env(safe-area-inset-top, 0px)";
+    probe.style.paddingBottom = "env(safe-area-inset-bottom, 0px)";
+    const probeStyle = getComputedStyle(probe);
+    const safeTop = parseFloat(probeStyle.paddingTop) || 0;
+    const safeBottom = parseFloat(probeStyle.paddingBottom) || 0;
+    probe.remove();
+
+    const safeAreaTotal = safeTop + safeBottom;
+    const viewportDifference = vhHeight - dvhHeight;
+    const measurementTolerance = Math.max(2, safeAreaTotal * .05);
+    const usesLegacyViewport = safeTop > 0 && viewportDifference > 0
+      && Math.abs(viewportDifference - safeAreaTotal) <= measurementTolerance;
+    root.classList.toggle("uses-legacy-standalone-vh", usesLegacyViewport);
+  });
+};
 const isLandscapeViewport = () => window.innerWidth > window.innerHeight;
 let wasLandscapeViewport = isLandscapeViewport();
 const updateViewportClasses = () => {
@@ -86,7 +118,11 @@ const state = {
 };
 
 updateViewportClasses();
+updateStandaloneViewportModel();
 window.addEventListener("resize", updateViewportClasses);
+window.addEventListener("orientationchange", updateStandaloneViewportModel);
+window.addEventListener("pageshow", updateStandaloneViewportModel);
+if (standaloneDisplayQuery.addEventListener) standaloneDisplayQuery.addEventListener("change", updateStandaloneViewportModel);
 
 function openLocalStore() {
   if (localStorePromise) return localStorePromise;
