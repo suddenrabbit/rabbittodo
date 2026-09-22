@@ -1673,21 +1673,27 @@ body.is-task-dragging {
   }
 }
 
-/* WebKit 触屏主屏应用的 svh/dvh 会重复扣除安全区，使用包含安全区的 vh。 */
+/* WebKit 触屏主屏应用：旧版 dvh 会扣掉安全区，而新版可能把网页层移到
+   状态栏下方却仍让 100vh 覆盖整屏。用动态视口加回实际安全区，兼容两种模型。 */
 @supports (-webkit-touch-callout: none) {
   @media (display-mode: standalone) and (any-pointer: coarse) {
     html,
     body {
       height: 100vh;
+      height: calc(100dvh + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
       min-height: 100vh;
+      min-height: calc(100dvh + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
       overflow: hidden;
     }
 
     .app-shell,
     .phone {
       height: 100vh;
+      height: calc(100dvh + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
       min-height: 100vh;
+      min-height: calc(100dvh + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
       max-height: 100vh;
+      max-height: calc(100dvh + env(safe-area-inset-top, 0px) + env(safe-area-inset-bottom, 0px));
     }
   }
 }
